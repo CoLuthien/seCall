@@ -22,7 +22,7 @@ AI 에이전트와 나눈 모든 대화를 검색하세요.
 ---
 
 <div align="center">
-<img src="screenshot-2026-04-06-143216.png" alt="seCall Obsidian 볼트" width="720" />
+<img src="screenshot.png" alt="seCall Obsidian 볼트" width="720" />
 <br/><br/>
 </div>
 
@@ -333,7 +333,7 @@ Claude Code 설정 (`~/.claude/settings.json`)에 추가:
 </div>
 
 <div align="center">
-<img src="screenshot-2026-04-06-143216.png" alt="seCall Obsidian Vault" width="720" />
+<img src="screenshot.png" alt="seCall Obsidian Vault" width="720" />
 <br/><br/>
 </div>
 
