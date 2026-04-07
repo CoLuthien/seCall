@@ -269,7 +269,7 @@ secall wiki status
 | `secall recall <query>` | 하이브리드 검색 |
 | `secall get <id>` | 세션 상세 조회 |
 | `secall status` | 인덱스 통계 |
-| `secall embed [--all]` | 미임베딩 세션 벡터 생성 |
+| `secall embed [--all] [--concurrency N] [--batch-size N]` | 벡터 임베딩 생성 (기본: concurrency=4, batch-size=32) |
 | `secall lint` | 인덱스/볼트 정합성 검증 |
 | `secall mcp` | MCP 서버 시작 |
 | `secall model download` | BGE-M3 ONNX 모델 다운로드 |
@@ -581,7 +581,7 @@ secall wiki status
 | `secall recall <query>` | Hybrid search across sessions |
 | `secall get <id>` | Retrieve session details |
 | `secall status` | Show index statistics |
-| `secall embed [--all]` | Generate vector embeddings for un-embedded sessions |
+| `secall embed [--all] [--concurrency N] [--batch-size N]` | Generate vector embeddings (default: concurrency=4, batch-size=32) |
 | `secall lint` | Verify index/vault integrity |
 | `secall mcp` | Start MCP server |
 | `secall model download` | Download BGE-M3 ONNX model |
@@ -639,6 +639,7 @@ This project was developed using AI coding agents (Claude Code, Codex) orchestra
 
 | 날짜 | 버전 | 내용 |
 |------|------|------|
+| 2026-04-07 | P11 | 임베딩 성능 최적화 — ORT session pool, batch inference, 병렬 처리, DB 트랜잭션 (49h → ~3-4h, 12-15x 개선) |
 | 2026-04-07 | P10 | 세션 `summary` frontmatter 추가 — 첫 User 턴 기반 자동 생성, `secall migrate summary`로 기존 세션 backfill |
 | 2026-04-07 | P9 | ChatGPT export 파서 설계 (데이터 대기 중) |
 | 2026-04-06 | P8 | 안정화 + GitHub Actions 릴리스 워크플로우, IngestError 구조화 |
