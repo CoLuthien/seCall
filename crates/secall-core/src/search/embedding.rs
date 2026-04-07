@@ -108,32 +108,62 @@ impl Embedder for OllamaEmbedder {
 /// Local ONNX-based embedder using ort + tokenizers.
 /// Requires model files at `model_dir/model.onnx` and `model_dir/tokenizer.json`.
 pub struct OrtEmbedder {
-    // Arc allows cloning the handle into spawn_blocking closures
-    session: Arc<Mutex<ort::session::Session>>,
+    /// Session pool — multiple ORT sessions for true parallel inference.
+    /// Each session is independently lockable so concurrent embed_batch calls
+    /// can run on different CPU cores simultaneously.
+    sessions: Vec<Arc<Mutex<ort::session::Session>>>,
+    next_session: std::sync::atomic::AtomicUsize,
     tokenizer: Arc<tokenizers::Tokenizer>,
     dim: usize,
 }
 
 impl OrtEmbedder {
     pub fn new(model_dir: &Path) -> Result<Self> {
+        Self::with_pool_size(model_dir, 4)
+    }
+
+    pub fn with_pool_size(model_dir: &Path, pool_size: usize) -> Result<Self> {
         use ort::session::builder::GraphOptimizationLevel;
 
-        let session = ort::session::Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .commit_from_file(model_dir.join("model.onnx"))?;
-
+        let pool_size = pool_size.max(1);
         let tokenizer = tokenizers::Tokenizer::from_file(model_dir.join("tokenizer.json"))
             .map_err(|e| anyhow!("tokenizer load failed: {e}"))?;
 
-        // Probe embedding dimension with a dummy input
-        let mut sess = session;
-        let dim = Self::probe_dim(&mut sess, &tokenizer).unwrap_or(1024);
+        // Build first session and probe dimensions
+        let mut first_session = ort::session::Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .commit_from_file(model_dir.join("model.onnx"))?;
+
+        let dim = Self::probe_dim(&mut first_session, &tokenizer).unwrap_or(1024);
+
+        let mut sessions = Vec::with_capacity(pool_size);
+        sessions.push(Arc::new(Mutex::new(first_session)));
+
+        // Build remaining sessions
+        for _ in 1..pool_size {
+            let sess = ort::session::Session::builder()?
+                .with_optimization_level(GraphOptimizationLevel::Level3)?
+                .commit_from_file(model_dir.join("model.onnx"))?;
+            sessions.push(Arc::new(Mutex::new(sess)));
+        }
+
+        tracing::info!(pool_size, dim, "ORT session pool created");
 
         Ok(Self {
-            session: Arc::new(Mutex::new(sess)),
+            sessions,
+            next_session: std::sync::atomic::AtomicUsize::new(0),
             tokenizer: Arc::new(tokenizer),
             dim,
         })
+    }
+
+    /// Round-robin session selection from the pool.
+    fn next_session(&self) -> Arc<Mutex<ort::session::Session>> {
+        let idx = self
+            .next_session
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % self.sessions.len();
+        Arc::clone(&self.sessions[idx])
     }
 
     fn probe_dim(
@@ -304,7 +334,7 @@ impl OrtEmbedder {
 #[async_trait]
 impl Embedder for OrtEmbedder {
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let session = Arc::clone(&self.session);
+        let session = self.next_session();
         let tokenizer = Arc::clone(&self.tokenizer);
         let text = text.to_string();
         tokio::task::spawn_blocking(move || {
@@ -318,7 +348,7 @@ impl Embedder for OrtEmbedder {
     }
 
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        let session = Arc::clone(&self.session);
+        let session = self.next_session();
         let tokenizer = Arc::clone(&self.tokenizer);
         let texts: Vec<String> = texts.iter().map(|t| t.to_string()).collect();
         tokio::task::spawn_blocking(move || {
