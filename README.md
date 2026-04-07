@@ -130,7 +130,7 @@ secall lint
 - Rust 1.75+
 - Claude Code, Codex CLI, Gemini CLI 중 하나 이상
 
-### 설치
+### Step 1. 설치
 
 ```bash
 git clone https://github.com/hang-in/seCall.git
@@ -138,7 +138,7 @@ cd seCall
 cargo install --path crates/secall
 ```
 
-### 초기화
+### Step 2. 초기화
 
 ```bash
 # Obsidian 볼트(또는 원하는 디렉토리)를 지정
@@ -148,7 +148,24 @@ secall init --vault ~/Documents/Obsidian\ Vault/seCall
 secall init --git git@github.com:you/obsidian-vault.git
 ```
 
-### 세션 수집
+### Step 3. 모델 다운로드
+
+시맨틱 검색에 사용되는 ONNX Runtime + BGE-M3 모델을 다운로드합니다. ONNX Runtime은 seCall에 내장되어 있어 별도 설치가 필요 없습니다.
+
+```bash
+# BGE-M3 ONNX 모델 다운로드 (~1.1GB, 최초 1회)
+secall model download
+
+# 다운로드 상태 확인
+secall model info
+
+# 모델 업데이트 체크
+secall model check-update
+```
+
+> **참고**: 모델은 `~/.cache/secall/models/bge-m3-onnx/`에 저장됩니다. 시맨틱 검색(`--vec`)을 사용하지 않는다면 이 단계를 건너뛸 수 있습니다.
+
+### Step 4. 세션 수집
 
 ```bash
 # Claude Code 세션 자동 감지
@@ -167,7 +184,24 @@ secall ingest ~/Downloads/data-2026-04-06.zip
 secall sync
 ```
 
-### 검색
+### Step 5. 임베딩 생성
+
+시맨틱 검색을 위해 세션 벡터 인덱스를 생성합니다.
+
+```bash
+# 신규/변경된 세션만 임베딩
+secall embed
+
+# 전체 재임베딩
+secall embed --all
+
+# 성능 옵션 (M1 Max 기준 권장값)
+secall embed --concurrency 4 --batch-size 32
+```
+
+> **참고**: Step 3에서 모델을 다운로드하지 않았다면, 첫 `embed` 실행 시 자동으로 다운로드합니다.
+
+### Step 6. 검색
 
 ```bash
 # BM25 전문 검색
@@ -176,7 +210,7 @@ secall recall "BM25 인덱싱 구현"
 # 프로젝트, 에이전트, 날짜 필터
 secall recall "에러 처리" --project seCall --agent claude-code --since 2026-04-01
 
-# 벡터 시맨틱 검색
+# 벡터 시맨틱 검색 (Step 3, 5 필요)
 secall recall "검색 파이프라인 동작 방식" --vec
 
 # LLM 쿼리 확장
@@ -442,7 +476,7 @@ secall lint
 - Rust 1.75+
 - At least one of: Claude Code, Codex CLI, Gemini CLI
 
-### Install
+### Step 1. Install
 
 ```bash
 git clone https://github.com/hang-in/seCall.git
@@ -450,7 +484,7 @@ cd seCall
 cargo install --path crates/secall
 ```
 
-### Initialize
+### Step 2. Initialize
 
 ```bash
 # Point to your Obsidian vault (or any directory)
@@ -460,7 +494,24 @@ secall init --vault ~/Documents/Obsidian\ Vault/seCall
 secall init --git git@github.com:you/obsidian-vault.git
 ```
 
-### Ingest Sessions
+### Step 3. Download Model
+
+Download the ONNX Runtime + BGE-M3 model used for semantic search. ONNX Runtime is bundled with seCall — no separate installation needed.
+
+```bash
+# Download BGE-M3 ONNX model (~1.1GB, one-time)
+secall model download
+
+# Check download status
+secall model info
+
+# Check for model updates
+secall model check-update
+```
+
+> **Note**: The model is stored at `~/.cache/secall/models/bge-m3-onnx/`. You can skip this step if you don't plan to use semantic search (`--vec`).
+
+### Step 4. Ingest Sessions
 
 ```bash
 # Auto-detect Claude Code sessions
@@ -479,7 +530,24 @@ secall ingest ~/Downloads/data-2026-04-06.zip
 secall sync
 ```
 
-### Search
+### Step 5. Build Embeddings
+
+Generate vector indexes for semantic search.
+
+```bash
+# Embed new/changed sessions only
+secall embed
+
+# Re-embed all sessions
+secall embed --all
+
+# Performance tuning (recommended for M1 Max)
+secall embed --concurrency 4 --batch-size 32
+```
+
+> **Note**: If the model was not downloaded in Step 3, the first `embed` run will download it automatically.
+
+### Step 6. Search
 
 ```bash
 # BM25 full-text search
@@ -488,7 +556,7 @@ secall recall "BM25 인덱싱 구현"
 # Filter by project, agent, date
 secall recall "에러 처리" --project seCall --agent claude-code --since 2026-04-01
 
-# Vector-only semantic search
+# Vector-only semantic search (requires Steps 3 & 5)
 secall recall "how does the search pipeline work" --vec
 
 # LLM-expanded query
