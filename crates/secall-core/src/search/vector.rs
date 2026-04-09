@@ -6,6 +6,7 @@
 /// for MVP scale (< 100k chunks).
 use anyhow::Result;
 
+#[cfg(not(target_os = "windows"))]
 use super::ann::AnnIndex;
 use super::bm25::{IndexStats, SearchFilters, SearchResult, SessionMeta};
 use super::chunker::chunk_session;
@@ -28,6 +29,7 @@ pub struct VectorRow {
 pub struct VectorIndexer {
     embedder: Box<dyn Embedder>,
     /// HNSW ANN 인덱스. None이면 기존 BLOB 선형 스캔으로 fallback.
+    #[cfg(not(target_os = "windows"))]
     ann_index: Option<AnnIndex>,
     batch_size: usize,
 }
@@ -36,11 +38,13 @@ impl VectorIndexer {
     pub fn new(embedder: Box<dyn Embedder>) -> Self {
         VectorIndexer {
             embedder,
+            #[cfg(not(target_os = "windows"))]
             ann_index: None,
             batch_size: 32,
         }
     }
 
+    #[cfg(not(target_os = "windows"))]
     pub fn with_ann(mut self, ann_index: AnnIndex) -> Self {
         self.ann_index = Some(ann_index);
         self
@@ -53,6 +57,7 @@ impl VectorIndexer {
 
     /// ANN 인덱스를 파일에 저장. 존재하지 않으면 no-op.
     pub fn save_ann_if_present(&self) -> Result<()> {
+        #[cfg(not(target_os = "windows"))]
         if let Some(ref ann) = self.ann_index {
             ann.save()?;
         }
@@ -122,6 +127,7 @@ impl VectorIndexer {
                         self.embedder.model_name(),
                     )?; // Err → 클로저 종료 → ROLLBACK
                     chunks_embedded += 1;
+                    #[cfg(not(target_os = "windows"))]
                     if let Some(ref ann) = self.ann_index {
                         if let Err(e) = ann.add(rowid as u64, embedding) {
                             tracing::warn!(error = %e, "ANN index add failed");
@@ -166,6 +172,7 @@ impl VectorIndexer {
         candidate_session_ids: Option<&[String]>,
     ) -> anyhow::Result<Vec<SearchResult>> {
         // ANN 경로: session_ids 필터 없고 ANN 인덱스 사용 가능할 때
+        #[cfg(not(target_os = "windows"))]
         if candidate_session_ids.is_none() {
             if let Some(ref ann) = self.ann_index {
                 // Stale guard (크기 기반): ANN이 DB보다 작으면 새 벡터가 ANN에 없음 → BLOB 스캔
@@ -327,7 +334,9 @@ pub async fn create_vector_indexer(config: &Config) -> Option<VectorIndexer> {
         }
     };
 
-    Some(attach_ann_index(indexer))
+    #[cfg(not(target_os = "windows"))]
+    let indexer = attach_ann_index(indexer);
+    Some(indexer)
 }
 
 async fn try_ollama_fallback_with_ann(config: &Config) -> Option<VectorIndexer> {
@@ -336,13 +345,17 @@ async fn try_ollama_fallback_with_ann(config: &Config) -> Option<VectorIndexer> 
     let embedder = OllamaEmbedder::new(base_url, model);
     if embedder.is_available().await {
         tracing::info!("Ollama available, vector search enabled");
-        Some(attach_ann_index(VectorIndexer::new(Box::new(embedder))))
+        let indexer = VectorIndexer::new(Box::new(embedder));
+        #[cfg(not(target_os = "windows"))]
+        let indexer = attach_ann_index(indexer);
+        Some(indexer)
     } else {
         tracing::warn!("Ollama not available, vector search disabled, BM25-only mode");
         None
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 /// ANN 인덱스 파일을 로드(또는 생성)하여 VectorIndexer에 붙임.
 /// 로드 실패 시 ANN 없이 반환 (graceful degradation).
 fn attach_ann_index(indexer: VectorIndexer) -> VectorIndexer {

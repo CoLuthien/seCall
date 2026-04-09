@@ -29,13 +29,13 @@ axum.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-usearch.workspace = true
 gethostname.workspace = true
 serde_yaml.workspace = true
 zip.workspace = true
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 kiwi-rs.workspace = true
+usearch.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -1,147 +1,150 @@
-use anyhow::Result;
-use std::path::{Path, PathBuf};
-use usearch::{new_index, Index, IndexOptions, MetricKind, ScalarKind};
+#[cfg(not(target_os = "windows"))]
+mod inner {
+    use anyhow::Result;
+    use std::path::{Path, PathBuf};
+    use usearch::{new_index, Index, IndexOptions, MetricKind, ScalarKind};
 
-pub struct AnnIndex {
-    index: Index,
-    path: PathBuf,
-    dimensions: usize,
-}
-
-impl AnnIndex {
-    /// 기존 인덱스 파일이 있으면 로드, 없으면 새로 생성.
-    pub fn open_or_create(path: &Path, dimensions: usize) -> Result<Self> {
-        let options = IndexOptions {
-            dimensions,
-            metric: MetricKind::Cos,
-            quantization: ScalarKind::F32,
-            connectivity: 0,
-            expansion_add: 0,
-            expansion_search: 0,
-            multi: false,
-        };
-        let index = new_index(&options).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        if path.exists() {
-            let path_str = path
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("non-UTF-8 ANN index path: {:?}", path))?;
-            index.load(path_str).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-            // 로드 후 추가 삽입을 위한 여유 공간 사전 할당.
-            // usearch는 capacity 없이 add()하면 "Reserve capacity ahead of insertions!" 경고를 출력한다.
-            let current = index.size();
-            let reserve_target = current + 10_000;
-            index
-                .reserve(reserve_target)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-            tracing::info!(
-                path = %path.display(),
-                vectors = current,
-                capacity = reserve_target,
-                "ANN index loaded"
-            );
-        } else {
-            index.reserve(10_000).map_err(|e| anyhow::anyhow!("{e}"))?;
-            tracing::info!(path = %path.display(), "ANN index created (empty)");
-        }
-
-        Ok(Self {
-            index,
-            path: path.to_path_buf(),
-            dimensions,
-        })
+    pub struct AnnIndex {
+        index: Index,
+        path: PathBuf,
+        dimensions: usize,
     }
 
-    /// 벡터 추가. key는 turn_vectors 테이블의 rowid.
-    pub fn add(&self, key: u64, vector: &[f32]) -> Result<()> {
-        // capacity 부족 시 자동 reserve (방어적 — loaded index 이후 대량 insert 대응)
-        if self.index.size() >= self.index.capacity() {
-            let new_cap = self.index.capacity() + 10_000;
+    impl AnnIndex {
+        /// 기존 인덱스 파일이 있으면 로드, 없으면 새로 생성.
+        pub fn open_or_create(path: &Path, dimensions: usize) -> Result<Self> {
+            let options = IndexOptions {
+                dimensions,
+                metric: MetricKind::Cos,
+                quantization: ScalarKind::F32,
+                connectivity: 0,
+                expansion_add: 0,
+                expansion_search: 0,
+                multi: false,
+            };
+            let index = new_index(&options).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+            if path.exists() {
+                let path_str = path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("non-UTF-8 ANN index path: {:?}", path))?;
+                index.load(path_str).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+                let current = index.size();
+                let reserve_target = current + 10_000;
+                index
+                    .reserve(reserve_target)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+                tracing::info!(
+                    path = %path.display(),
+                    vectors = current,
+                    capacity = reserve_target,
+                    "ANN index loaded"
+                );
+            } else {
+                index.reserve(10_000).map_err(|e| anyhow::anyhow!("{e}"))?;
+                tracing::info!(path = %path.display(), "ANN index created (empty)");
+            }
+
+            Ok(Self {
+                index,
+                path: path.to_path_buf(),
+                dimensions,
+            })
+        }
+
+        /// 벡터 추가. key는 turn_vectors 테이블의 rowid.
+        pub fn add(&self, key: u64, vector: &[f32]) -> Result<()> {
+            if self.index.size() >= self.index.capacity() {
+                let new_cap = self.index.capacity() + 10_000;
+                self.index
+                    .reserve(new_cap)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                tracing::debug!(new_capacity = new_cap, "ANN index auto-reserved");
+            }
             self.index
-                .reserve(new_cap)
+                .add(key, vector)
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        }
+
+        /// ANN 검색. 상위 limit개의 (key, distance) 반환.
+        pub fn search(&self, query: &[f32], limit: usize) -> Result<Vec<(u64, f32)>> {
+            let results = self
+                .index
+                .search(query, limit)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-            tracing::debug!(new_capacity = new_cap, "ANN index auto-reserved");
+            Ok(results.keys.into_iter().zip(results.distances).collect())
         }
-        self.index
-            .add(key, vector)
-            .map_err(|e| anyhow::anyhow!("{e}"))
+
+        /// 인덱스를 파일에 저장.
+        pub fn save(&self) -> Result<()> {
+            let path_str = self
+                .path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("non-UTF-8 ANN index path: {:?}", self.path))?;
+            self.index
+                .save(path_str)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            tracing::info!(
+                path = %self.path.display(),
+                vectors = self.index.size(),
+                "ANN index saved"
+            );
+            Ok(())
+        }
+
+        pub fn size(&self) -> usize {
+            self.index.size()
+        }
+
+        pub fn dimensions(&self) -> usize {
+            self.dimensions
+        }
     }
 
-    /// ANN 검색. 상위 limit개의 (key, distance) 반환.
-    pub fn search(&self, query: &[f32], limit: usize) -> Result<Vec<(u64, f32)>> {
-        let results = self
-            .index
-            .search(query, limit)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(results.keys.into_iter().zip(results.distances).collect())
-    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use tempfile::tempdir;
 
-    /// 인덱스를 파일에 저장.
-    pub fn save(&self) -> Result<()> {
-        let path_str = self
-            .path
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 ANN index path: {:?}", self.path))?;
-        self.index
-            .save(path_str)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        tracing::info!(
-            path = %self.path.display(),
-            vectors = self.index.size(),
-            "ANN index saved"
-        );
-        Ok(())
-    }
+        #[test]
+        fn test_ann_create_add_search() {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("test.usearch");
 
-    pub fn size(&self) -> usize {
-        self.index.size()
-    }
-
-    pub fn dimensions(&self) -> usize {
-        self.dimensions
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_ann_create_add_search() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test.usearch");
-
-        let ann = AnnIndex::open_or_create(&path, 3).unwrap();
-        assert_eq!(ann.size(), 0);
-        assert_eq!(ann.dimensions(), 3);
-
-        ann.add(1, &[1.0_f32, 0.0, 0.0]).unwrap();
-        ann.add(2, &[0.0_f32, 1.0, 0.0]).unwrap();
-        assert_eq!(ann.size(), 2);
-
-        let results = ann.search(&[1.0_f32, 0.1, 0.0], 2).unwrap();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].0, 1); // closer to [1,0,0]
-    }
-
-    #[test]
-    fn test_ann_save_load() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test.usearch");
-
-        {
             let ann = AnnIndex::open_or_create(&path, 3).unwrap();
-            ann.add(42, &[1.0_f32, 0.0, 0.0]).unwrap();
-            ann.save().unwrap();
+            assert_eq!(ann.size(), 0);
+            assert_eq!(ann.dimensions(), 3);
+
+            ann.add(1, &[1.0_f32, 0.0, 0.0]).unwrap();
+            ann.add(2, &[0.0_f32, 1.0, 0.0]).unwrap();
+            assert_eq!(ann.size(), 2);
+
+            let results = ann.search(&[1.0_f32, 0.1, 0.0], 2).unwrap();
+            assert_eq!(results.len(), 2);
+            assert_eq!(results[0].0, 1); // closer to [1,0,0]
         }
 
-        // Reload from file
-        let ann2 = AnnIndex::open_or_create(&path, 3).unwrap();
-        assert_eq!(ann2.size(), 1);
-        let results = ann2.search(&[1.0_f32, 0.0, 0.0], 1).unwrap();
-        assert_eq!(results[0].0, 42);
+        #[test]
+        fn test_ann_save_load() {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("test.usearch");
+
+            {
+                let ann = AnnIndex::open_or_create(&path, 3).unwrap();
+                ann.add(42, &[1.0_f32, 0.0, 0.0]).unwrap();
+                ann.save().unwrap();
+            }
+
+            // Reload from file
+            let ann2 = AnnIndex::open_or_create(&path, 3).unwrap();
+            assert_eq!(ann2.size(), 1);
+            let results = ann2.search(&[1.0_f32, 0.0, 0.0], 1).unwrap();
+            assert_eq!(results[0].0, 42);
+        }
     }
 }
+
+#[cfg(not(target_os = "windows"))]
+pub use inner::AnnIndex;
