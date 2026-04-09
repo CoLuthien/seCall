@@ -8,6 +8,11 @@
 - 멀티 content type 지원: text, code, multimodal_text, execution_output, reasoning_recap, thoughts, tether_browsing_display, user_editable_context
 - `AgentKind::ChatGpt` variant
 - `detect.rs`에 ChatGPT export 자동 탐지 로직 추가
+- **Windows 빌드 지원** (`x86_64-pc-windows-msvc`)
+  - CI에 `windows-latest` 매트릭스 추가 (fmt, clippy, test)
+  - Release 워크플로우에 Windows 타겟 추가 + ORT DLL (`onnxruntime.dll 1.22.0`) 번들링
+  - `tokenizers` 피처 `onig` → `fancy-regex` (순수 Rust, 전 플랫폼 통일)
+  - `kiwi-rs`를 `cfg(not(target_os = "windows"))` 조건부 의존성으로 분리 (Windows에서는 lindera fallback)
 
 ## v0.2.2 (2026-04-08)
 

@@ -67,65 +67,73 @@ impl Tokenizer for LinderaKoTokenizer {
 
 // ─── KiwiTokenizer ────────────────────────────────────────────────────────────
 
-/// Newtype wrapper so we can impl Send without Sync.
-/// kiwi_rs::Kiwi contains *mut c_void + RefCell internals — not Sync.
-struct KiwiWrapper(kiwi_rs::Kiwi);
+#[cfg(not(target_os = "windows"))]
+mod kiwi_impl {
+    use super::*;
 
-// SAFETY: kiwi_rs::Kiwi wraps a C pointer that is safe to move between threads.
-// We do NOT implement Sync — all concurrent access is serialized via Mutex below.
-unsafe impl Send for KiwiWrapper {}
+    /// Newtype wrapper so we can impl Send without Sync.
+    /// kiwi_rs::Kiwi contains *mut c_void + RefCell internals — not Sync.
+    pub(super) struct KiwiWrapper(pub(super) kiwi_rs::Kiwi);
 
-/// Korean morphological tokenizer backed by kiwi-rs.
-/// On first use, `Kiwi::init()` downloads the model (~50MB) to ~/.cache/kiwi/.
-/// Thread safety is provided by `Mutex<KiwiWrapper>`.
-pub struct KiwiTokenizer {
-    kiwi: std::sync::Mutex<KiwiWrapper>,
-}
+    // SAFETY: kiwi_rs::Kiwi wraps a C pointer that is safe to move between threads.
+    // We do NOT implement Sync — all concurrent access is serialized via Mutex below.
+    unsafe impl Send for KiwiWrapper {}
 
-// Mutex<KiwiWrapper>: Sync because KiwiWrapper: Send — no unsafe needed.
-
-impl KiwiTokenizer {
-    pub fn new() -> Result<Self> {
-        let kiwi =
-            kiwi_rs::Kiwi::init().map_err(|e| anyhow::anyhow!("kiwi-rs init failed: {e}"))?;
-        Ok(Self {
-            kiwi: std::sync::Mutex::new(KiwiWrapper(kiwi)),
-        })
+    /// Korean morphological tokenizer backed by kiwi-rs.
+    /// On first use, `Kiwi::init()` downloads the model (~50MB) to ~/.cache/kiwi/.
+    /// Thread safety is provided by `Mutex<KiwiWrapper>`.
+    pub struct KiwiTokenizer {
+        pub(super) kiwi: std::sync::Mutex<KiwiWrapper>,
     }
-}
 
-impl Tokenizer for KiwiTokenizer {
-    fn tokenize(&self, text: &str) -> Vec<String> {
-        if text.is_empty() {
-            return Vec::new();
+    // Mutex<KiwiWrapper>: Sync because KiwiWrapper: Send — no unsafe needed.
+
+    impl KiwiTokenizer {
+        pub fn new() -> Result<Self> {
+            let kiwi =
+                kiwi_rs::Kiwi::init().map_err(|e| anyhow::anyhow!("kiwi-rs init failed: {e}"))?;
+            Ok(Self {
+                kiwi: std::sync::Mutex::new(KiwiWrapper(kiwi)),
+            })
         }
+    }
 
-        let guard = match self.kiwi.lock() {
-            Ok(g) => g,
-            Err(e) => e.into_inner(),
-        };
-        match guard.0.tokenize(text) {
-            Ok(tokens) => {
-                let result: Vec<String> = tokens
-                    .into_iter()
-                    .filter(|t| {
-                        // Keep NNG, NNP, NNB (nouns), VV (verbs), VA (adjectives), SL (foreign)
-                        matches!(t.tag.as_str(), "NNG" | "NNP" | "NNB" | "VV" | "VA" | "SL")
-                    })
-                    .map(|t| t.form.to_lowercase())
-                    .filter(|s| s.chars().count() > 1)
-                    .collect();
-
-                if result.is_empty() {
-                    tokenize_fallback(text)
-                } else {
-                    result
-                }
+    impl Tokenizer for KiwiTokenizer {
+        fn tokenize(&self, text: &str) -> Vec<String> {
+            if text.is_empty() {
+                return Vec::new();
             }
-            Err(_) => tokenize_fallback(text),
+
+            let guard = match self.kiwi.lock() {
+                Ok(g) => g,
+                Err(e) => e.into_inner(),
+            };
+            match guard.0.tokenize(text) {
+                Ok(tokens) => {
+                    let result: Vec<String> = tokens
+                        .into_iter()
+                        .filter(|t| {
+                            // Keep NNG, NNP, NNB (nouns), VV (verbs), VA (adjectives), SL (foreign)
+                            matches!(t.tag.as_str(), "NNG" | "NNP" | "NNB" | "VV" | "VA" | "SL")
+                        })
+                        .map(|t| t.form.to_lowercase())
+                        .filter(|s| s.chars().count() > 1)
+                        .collect();
+
+                    if result.is_empty() {
+                        tokenize_fallback(text)
+                    } else {
+                        result
+                    }
+                }
+                Err(_) => tokenize_fallback(text),
+            }
         }
     }
 }
+
+#[cfg(not(target_os = "windows"))]
+pub use kiwi_impl::KiwiTokenizer;
 
 // ─── SimpleTokenizer ──────────────────────────────────────────────────────────
 
@@ -144,6 +152,7 @@ impl Tokenizer for SimpleTokenizer {
 /// Falls back to lindera if kiwi-rs fails to initialize.
 pub fn create_tokenizer(backend: &str) -> Result<Box<dyn Tokenizer>> {
     match backend {
+        #[cfg(not(target_os = "windows"))]
         "kiwi" => match KiwiTokenizer::new() {
             Ok(t) => {
                 tracing::info!("kiwi-rs tokenizer loaded");
@@ -229,6 +238,7 @@ mod tests {
         assert!(tok.is_ok());
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     #[ignore]
     fn test_kiwi_korean_tokenization() {
@@ -238,6 +248,7 @@ mod tests {
         assert!(!tokens.is_empty());
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     #[ignore]
     fn test_kiwi_english_tokenization() {
@@ -246,6 +257,7 @@ mod tests {
         assert!(!tokens.is_empty());
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     #[ignore]
     fn test_kiwi_mixed_tokenization() {
@@ -254,6 +266,7 @@ mod tests {
         assert!(!tokens.is_empty());
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     #[ignore]
     fn test_kiwi_empty() {
@@ -262,6 +275,7 @@ mod tests {
         assert!(tokens.is_empty());
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     #[ignore]
     fn test_create_tokenizer_kiwi() {

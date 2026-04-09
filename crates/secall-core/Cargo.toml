@@ -23,7 +23,6 @@ async-trait.workspace = true
 ort.workspace = true
 ndarray.workspace = true
 tokenizers.workspace = true
-kiwi-rs.workspace = true
 sha2.workspace = true
 futures-util.workspace = true
 axum.workspace = true
@@ -34,6 +33,9 @@ usearch.workspace = true
 gethostname.workspace = true
 serde_yaml.workspace = true
 zip.workspace = true
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+kiwi-rs.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -16,6 +16,8 @@ jobs:
             os: macos-latest
           - target: x86_64-apple-darwin
             os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -24,14 +26,40 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo build --release --target ${{ matrix.target }} -p secall
-      - run: |
+
+      - name: Bundle ORT DLL (Windows)
+        if: contains(matrix.target, 'windows')
+        shell: pwsh
+        run: |
+          # ort-sys 2.0.0-rc.10 expects ONNX Runtime 1.22.0 (verified via build.rs ONNXRUNTIME_VERSION)
+          $ORT_VERSION = "1.22.0"
+          $URL = "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-win-x64-${ORT_VERSION}.zip"
+          Invoke-WebRequest -Uri $URL -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath ort
+          Copy-Item "ort/onnxruntime-win-x64-${ORT_VERSION}/lib/onnxruntime.dll" `
+            "target/${{ matrix.target }}/release/"
+
+      - name: Package (Unix)
+        if: "!contains(matrix.target, 'windows')"
+        run: |
           cd target/${{ matrix.target }}/release
           tar czf secall-${{ matrix.target }}.tar.gz secall
           mv secall-${{ matrix.target }}.tar.gz ${{ github.workspace }}/
+
+      - name: Package (Windows)
+        if: contains(matrix.target, 'windows')
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path secall.exe, onnxruntime.dll `
+            -DestinationPath "${{ github.workspace }}/secall-${{ matrix.target }}.zip"
+
       - uses: actions/upload-artifact@v4
         with:
           name: secall-${{ matrix.target }}
-          path: secall-${{ matrix.target }}.tar.gz
+          path: |
+            secall-${{ matrix.target }}.tar.gz
+            secall-${{ matrix.target }}.zip
 
   release:
     needs: build
@@ -45,4 +73,5 @@ jobs:
           files: |
             secall-aarch64-apple-darwin/secall-aarch64-apple-darwin.tar.gz
             secall-x86_64-apple-darwin/secall-x86_64-apple-darwin.tar.gz
+            secall-x86_64-pc-windows-msvc/secall-x86_64-pc-windows-msvc.zip
           generate_release_notes: true

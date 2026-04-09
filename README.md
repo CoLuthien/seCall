@@ -130,14 +130,21 @@ secall lint
 
 - Rust 1.75+
 - Claude Code, Codex CLI, Gemini CLI 중 하나 이상
+- **Windows**: MSVC 툴체인 (Visual Studio Build Tools)
 
 ### Step 1. 설치
+
+**소스 빌드:**
 
 ```bash
 git clone https://github.com/hang-in/seCall.git
 cd seCall
 cargo install --path crates/secall
 ```
+
+**사전 빌드 바이너리** ([Releases](https://github.com/hang-in/seCall/releases)):
+- macOS: `secall-aarch64-apple-darwin.tar.gz` / `secall-x86_64-apple-darwin.tar.gz`
+- Windows: `secall-x86_64-pc-windows-msvc.zip` (secall.exe + onnxruntime.dll)
 
 ### Step 2. 초기화
 
@@ -293,7 +300,8 @@ secall wiki status
 |---|---|
 | 언어 | Rust 1.75+ (2021 에디션) |
 | 데이터베이스 | SQLite + FTS5 (rusqlite, bundled) |
-| 한국어 NLP | Lindera ko-dic + Kiwi-rs 형태소 분석 |
+| 한국어 NLP | Lindera ko-dic + Kiwi-rs 형태소 분석 (macOS/Linux) |
+| 플랫폼 | macOS, Windows (x86_64), Linux (CI) |
 | 임베딩 | ONNX Runtime + BGE-M3 (384차원) |
 | MCP 서버 | rmcp (stdio + Streamable HTTP / axum) |
 | 볼트 | Obsidian 호환 Markdown |
@@ -304,6 +312,7 @@ secall wiki status
 설정 파일 경로:
 - **macOS**: `~/Library/Application Support/secall/config.toml`
 - **Linux**: `~/.config/secall/config.toml`
+- **Windows**: `%APPDATA%\secall\config.toml`
 
 아래 옵션을 설정할 수 있습니다:
 
@@ -498,14 +507,21 @@ secall lint
 
 - Rust 1.75+
 - At least one of: Claude Code, Codex CLI, Gemini CLI
+- **Windows**: MSVC toolchain (Visual Studio Build Tools)
 
 ### Step 1. Install
+
+**From source:**
 
 ```bash
 git clone https://github.com/hang-in/seCall.git
 cd seCall
 cargo install --path crates/secall
 ```
+
+**Pre-built binaries** ([Releases](https://github.com/hang-in/seCall/releases)):
+- macOS: `secall-aarch64-apple-darwin.tar.gz` / `secall-x86_64-apple-darwin.tar.gz`
+- Windows: `secall-x86_64-pc-windows-msvc.zip` (secall.exe + onnxruntime.dll)
 
 ### Step 2. Initialize
 
@@ -661,7 +677,8 @@ secall wiki status
 |---|---|
 | Language | Rust 1.75+ (2021 edition) |
 | Database | SQLite with FTS5 (rusqlite, bundled) |
-| Korean NLP | Lindera ko-dic + Kiwi-rs morpheme analysis |
+| Korean NLP | Lindera ko-dic + Kiwi-rs morpheme analysis (macOS/Linux) |
+| Platforms | macOS, Windows (x86_64), Linux (CI) |
 | Embeddings | ONNX Runtime + BGE-M3 (384-dim) |
 | MCP Server | rmcp (stdio + Streamable HTTP via axum) |
 | Vault | Obsidian-compatible Markdown |
@@ -672,6 +689,7 @@ secall wiki status
 Config file location:
 - **macOS**: `~/Library/Application Support/secall/config.toml`
 - **Linux**: `~/.config/secall/config.toml`
+- **Windows**: `%APPDATA%\secall\config.toml`
 
 ```toml
 [output]
@@ -749,6 +767,7 @@ This project was developed using AI coding agents (Claude Code, Codex) orchestra
 
 | 날짜 | 버전 | 내용 |
 |------|------|------|
+| 2026-04-09 | P13 | Windows 빌드 지원 — `x86_64-pc-windows-msvc` CI/Release 추가, ORT DLL 번들링, `tokenizers` onig→fancy-regex, kiwi-rs 조건부 컴파일 |
 | 2026-04-09 | v0.2.3 | ChatGPT export 파서 — `conversations.json` (ZIP) 파싱, mapping tree 선형화, 멀티 content type 지원 |
 | 2026-04-08 | v0.2.2 | 타임존 설정 — `config.toml` `[output] timezone` 으로 vault 타임스탬프 IANA 타임존 변환 |
 | 2026-04-08 | v0.2.1 | `--force` 재수집 옵션 + Dataview `::` 이스케이프 + AGPL-3.0 LICENSE |
