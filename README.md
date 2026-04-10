@@ -88,15 +88,39 @@ Obsidian 호환 마크다운 볼트 (2계층 구조):
 vault/
 ├── raw/sessions/    # 불변 세션 원본
 │   └── YYYY-MM-DD/  # 날짜별 정리
-└── wiki/            # AI 생성 지식 페이지
-    ├── projects/    # 프로젝트별 요약
-    ├── topics/      # 기술 주제 페이지
-    └── decisions/   # 아키텍처 의사결정 기록
+├── wiki/            # AI 생성 지식 페이지
+│   ├── projects/    # 프로젝트별 요약
+│   ├── topics/      # 기술 주제 페이지
+│   └── decisions/   # 아키텍처 의사결정 기록
+└── graph/           # Knowledge Graph 출력
+    └── graph.json   # 노드/엣지 데이터
 ```
 
 - **위키 생성**: Claude Code 메타에이전트 기반 (`secall wiki update`)
 - **Obsidian 백링크** (`[[]]`)로 세션 ↔ 위키 페이지 연결
 - Dataview 쿼리를 위한 frontmatter 메타데이터 (`summary` 필드로 세션 내용 즉시 파악)
+
+### Knowledge Graph
+
+세션 간 관계를 결정적으로 추출하여 지식 그래프를 구축합니다 (LLM 호출 불필요):
+
+```bash
+# 전체 그래프 빌드
+secall graph build
+
+# 통계 확인
+secall graph stats
+
+# graph.json 내보내기 (Obsidian vault에 저장)
+secall graph export
+```
+
+- **노드 타입**: session (960+), project, agent, tool — frontmatter에서 자동 추출
+- **엣지 타입**: `belongs_to`, `by_agent`, `uses_tool`, `same_project`, `same_day`
+- **Confidence 태깅**: 모든 엣지에 EXTRACTED 라벨 (graphify 패턴 차용)
+- **증분 빌드**: 신규 세션만 노드 추가, 관계 엣지는 전체 재계산으로 정확성 보장
+- **sync 통합**: `secall sync` 실행 시 자동으로 그래프 갱신 (Phase 3.7)
+- **MCP 도구**: `graph_query` — AI 에이전트가 세션 간 관계를 탐색 (BFS, 최대 3홉)
 
 ### MCP 서버
 
@@ -110,7 +134,7 @@ secall mcp
 secall mcp --http 127.0.0.1:8080
 ```
 
-제공 도구: `recall`, `get`, `status`, `wiki_search` — AI 에이전트가 자신의 대화 이력과 위키 지식을 검색할 수 있습니다.
+제공 도구: `recall`, `get`, `status`, `wiki_search`, `graph_query` — AI 에이전트가 자신의 대화 이력, 위키 지식, 세션 간 관계 그래프를 검색할 수 있습니다.
 
 ### 데이터 무결성
 
@@ -335,7 +359,7 @@ timezone = "Asia/Seoul"    # 기본값: UTC (IANA 타임존 이름)
 |---|---|
 | `secall init [--git <remote>]` | 볼트, 설정, 데이터베이스 초기화 |
 | `secall ingest [path] --auto [--min-turns N]` | 에이전트 세션 파싱 및 인덱싱 |
-| `secall sync [--local-only] [--no-wiki]` | 전체 동기화: git pull → reindex → ingest → wiki → git push |
+| `secall sync [--local-only] [--no-wiki]` | 전체 동기화: git pull → reindex → ingest → wiki → graph → git push |
 | `secall reindex --from-vault` | 볼트 마크다운에서 DB 재구축 |
 | `secall recall <query>` | 하이브리드 검색 |
 | `secall get <id>` | 세션 상세 조회 |
@@ -345,6 +369,9 @@ timezone = "Asia/Seoul"    # 기본값: UTC (IANA 타임존 이름)
 | `secall mcp` | MCP 서버 시작 |
 | `secall model download` | BGE-M3 ONNX 모델 다운로드 |
 | `secall wiki update` | Claude Code 메타에이전트로 위키 생성 |
+| `secall graph build [--since] [--force]` | Knowledge Graph 빌드 (결정적 추출) |
+| `secall graph stats` | 그래프 통계 (노드/엣지 수, 타입별 분포) |
+| `secall graph export` | graph.json 내보내기 |
 | `secall migrate summary` | 기존 세션에 summary frontmatter 일괄 추가 |
 
 ## MCP 연동
@@ -387,6 +414,7 @@ Claude Code 설정 (`~/.claude/settings.json`)에 추가:
 
 - **[LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** (Andrej Karpathy) — LLM을 사용하여 원본 소스로부터 지속적이고 상호 연결된 지식 베이스를 점진적으로 구축하는 패턴. seCall의 2계층 볼트 아키텍처(원본 세션 + AI 생성 위키)는 이 컨셉을 직접 구현한 것입니다. [Tobi Lütke의 구현](https://github.com/tobi/llm-wiki)도 참고.
 - **[qmd](https://github.com/tobi/qmd)** (Tobi Lütke) — 마크다운 파일을 위한 로컬 검색 엔진으로, BM25/벡터 하이브리드 검색을 지원합니다. seCall의 검색 파이프라인(FTS5 BM25, 벡터 임베딩, RRF k=60)은 qmd의 접근 방식을 참고하여 설계되었습니다.
+- **[graphify](https://github.com/safishamsi/graphify)** (Safi Shamsi) — 파일 폴더를 knowledge graph로 변환하는 도구. 2-패스 추출(결정적 AST + 시맨틱 LLM), confidence 태깅(EXTRACTED/INFERRED/AMBIGUOUS), 커뮤니티 탐지 기법을 참고. seCall P16의 결정적 그래프 추출과 confidence 라벨링은 이 프로젝트에서 영감을 받았습니다.
 
 이 프로젝트는 AI 코딩 에이전트(Claude Code, Codex)를 [tunaFlow](https://github.com/hang-in/tunaFlow) 멀티에이전트 워크플로우 플랫폼으로 오케스트레이션하여 개발되었습니다.
 
@@ -471,15 +499,39 @@ Obsidian-compatible markdown vault with two layers:
 vault/
 ├── raw/sessions/    # Immutable session transcripts
 │   └── YYYY-MM-DD/  # Organized by date
-└── wiki/            # AI-generated knowledge pages
-    ├── projects/    # Per-project summaries
-    ├── topics/      # Technical topic pages
-    └── decisions/   # Architecture decision records
+├── wiki/            # AI-generated knowledge pages
+│   ├── projects/    # Per-project summaries
+│   ├── topics/      # Technical topic pages
+│   └── decisions/   # Architecture decision records
+└── graph/           # Knowledge Graph output
+    └── graph.json   # Node/edge data
 ```
 
 - **Wiki generation** via Claude Code meta-agent (`secall wiki update`)
 - **Obsidian backlinks** (`[[]]`) connecting sessions ↔ wiki pages
 - Frontmatter metadata for Dataview queries (`summary` field for at-a-glance session identification)
+
+### Knowledge Graph
+
+Deterministically extract relationships between sessions to build a knowledge graph (no LLM calls needed):
+
+```bash
+# Build entire graph
+secall graph build
+
+# View statistics
+secall graph stats
+
+# Export graph.json (saved to Obsidian vault)
+secall graph export
+```
+
+- **Node types**: session (960+), project, agent, tool — auto-extracted from frontmatter
+- **Edge types**: `belongs_to`, `by_agent`, `uses_tool`, `same_project`, `same_day`
+- **Confidence tagging**: all edges labeled EXTRACTED (inspired by graphify)
+- **Incremental builds**: new sessions get nodes added; relation edges are fully recomputed for accuracy
+- **Sync integration**: `secall sync` automatically updates the graph (Phase 3.7)
+- **MCP tool**: `graph_query` — AI agents can explore session relationships (BFS, max 3 hops)
 
 ### MCP Server
 
@@ -493,7 +545,7 @@ secall mcp
 secall mcp --http 127.0.0.1:8080
 ```
 
-Tools provided: `recall`, `get`, `status`, `wiki_search` — letting your AI agent search its own conversation history and wiki knowledge pages.
+Tools provided: `recall`, `get`, `status`, `wiki_search`, `graph_query` — letting your AI agent search its own conversation history, wiki knowledge pages, and session relationship graph.
 
 ### Data Integrity
 
@@ -716,7 +768,7 @@ When set, all timestamps in vault markdown (frontmatter `date`, `start_time`, `e
 |---|---|
 | `secall init [--git <remote>]` | Initialize vault, config, and database |
 | `secall ingest [path] --auto [--min-turns N]` | Parse and index agent sessions |
-| `secall sync [--local-only] [--no-wiki]` | Full sync: git pull → reindex → ingest → wiki → git push |
+| `secall sync [--local-only] [--no-wiki]` | Full sync: git pull → reindex → ingest → wiki → graph → git push |
 | `secall reindex --from-vault` | Rebuild DB from vault markdown files |
 | `secall recall <query>` | Hybrid search across sessions |
 | `secall get <id>` | Retrieve session details |
@@ -726,6 +778,9 @@ When set, all timestamps in vault markdown (frontmatter `date`, `start_time`, `e
 | `secall mcp` | Start MCP server |
 | `secall model download` | Download BGE-M3 ONNX model |
 | `secall wiki update` | Generate wiki via Claude Code |
+| `secall graph build [--since] [--force]` | Build knowledge graph (deterministic extraction) |
+| `secall graph stats` | Graph statistics (node/edge counts by type) |
+| `secall graph export` | Export graph.json |
 | `secall migrate summary` | Backfill summary frontmatter for existing sessions |
 
 ## MCP Integration
@@ -768,6 +823,7 @@ This project is built on ideas from:
 
 - **[LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** by Andrej Karpathy — The pattern of using LLMs to incrementally build and maintain a persistent, interlinked knowledge base from raw sources. seCall's two-layer vault architecture (raw sessions + AI-generated wiki) directly implements this concept. See also [Tobi Lütke's implementation](https://github.com/tobi/llm-wiki).
 - **[qmd](https://github.com/tobi/qmd)** by Tobi Lütke — A local search engine for markdown files with hybrid BM25/vector search. seCall's search pipeline (FTS5 BM25, vector embeddings, Reciprocal Rank Fusion with k=60) was designed with reference to qmd's approach.
+- **[graphify](https://github.com/safishamsi/graphify)** by Safi Shamsi — Turns file folders into queryable knowledge graphs. Two-pass extraction (deterministic AST + semantic LLM), confidence tagging (EXTRACTED/INFERRED/AMBIGUOUS), and community detection. seCall P16's deterministic graph extraction and confidence labeling were inspired by this project.
 
 This project was developed using AI coding agents (Claude Code, Codex) orchestrated via [tunaFlow](https://github.com/hang-in/tunaFlow), a multi-agent workflow platform.
 
@@ -779,6 +835,7 @@ This project was developed using AI coding agents (Claude Code, Codex) orchestra
 
 | 날짜 | 버전 | 내용 |
 |------|------|------|
+| 2026-04-10 | P16 | Knowledge Graph — frontmatter 기반 결정적 그래프 추출 (960 세션 → 1,076 노드, 4,663 엣지), `secall graph build/stats/export`, MCP `graph_query` 도구, sync Phase 3.7 자동 통합 |
 | 2026-04-09 | P15 | Windows 런타임 수정 — Ollama NaN 내성 임베딩 (부분 성공 허용), 크로스플랫폼 `command_exists`, sync 충돌 상태 preflight 체크 |
 | 2026-04-09 | P14 | 검색 품질 개선 — 벡터 검색 독립 실행 (BM25 후보 제한 제거), 세션 레벨 결과 다양성 (세션당 최대 2개 턴) |
 | 2026-04-09 | P13 | Windows 빌드 지원 — `x86_64-pc-windows-msvc` CI/Release 추가, ORT DLL 번들링, `tokenizers` onig→fancy-regex, kiwi-rs 조건부 컴파일 |

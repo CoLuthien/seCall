@@ -3,11 +3,15 @@ use std::process::Command;
 
 pub struct VaultGit<'a> {
     vault_path: &'a Path,
+    branch: String,
 }
 
 impl<'a> VaultGit<'a> {
-    pub fn new(vault_path: &'a Path) -> Self {
-        Self { vault_path }
+    pub fn new(vault_path: &'a Path, branch: &str) -> Self {
+        Self {
+            vault_path,
+            branch: branch.to_string(),
+        }
     }
 
     pub fn is_git_repo(&self) -> bool {
@@ -66,9 +70,8 @@ impl<'a> VaultGit<'a> {
         }
 
         self.run_git(&["init"])?;
-        // pull()/push()가 `origin main`을 하드코딩하므로 초기화 시 브랜치를 main으로 고정.
         // `symbolic-ref`는 첫 커밋 전에도 동작하며 모든 git 버전과 호환됨.
-        self.run_git(&["symbolic-ref", "HEAD", "refs/heads/main"])?;
+        self.run_git(&["symbolic-ref", "HEAD", &format!("refs/heads/{}", self.branch)])?;
         self.run_git(&["remote", "add", "origin", remote])?;
 
         // .gitignore — DB, 캐시, Obsidian 설정 제외
@@ -96,11 +99,11 @@ impl<'a> VaultGit<'a> {
             });
         }
 
-        let output = self.run_git(&["pull", "--rebase", "origin", "main"])?;
+        let output = self.run_git(&["pull", "--rebase", "origin", &self.branch])?;
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         let already_up_to_date = stdout.contains("Already up to date")
-            || stdout.contains("Current branch main is up to date");
+            || stdout.contains(&format!("Current branch {} is up to date", self.branch));
 
         let new_files = if !already_up_to_date {
             self.run_git(&["diff", "--stat", "HEAD@{1}", "HEAD"])
@@ -165,7 +168,7 @@ impl<'a> VaultGit<'a> {
         // vault.write_session()은 index.md와 log.md를 갱신하므로 누락 시 원격 상태 불일치.
         self.run_git(&["add", "raw/", "wiki/", "index.md", "log.md"])?;
         self.run_git(&["commit", "-m", message])?;
-        self.run_git(&["push", "origin", "main"])?;
+        self.run_git(&["push", "origin", &self.branch])?;
 
         tracing::info!(committed, "vault changes pushed");
         Ok(PushResult { committed })

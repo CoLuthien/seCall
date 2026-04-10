@@ -170,6 +170,33 @@ enum Commands {
         #[command(subcommand)]
         action: MigrateAction,
     },
+
+    /// Build and query knowledge graph
+    Graph {
+        #[command(subcommand)]
+        action: GraphAction,
+    },
+
+    /// View or modify configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Show current configuration
+    Show,
+    /// Set a configuration value
+    Set {
+        /// Config key (e.g. search.tokenizer, embedding.backend)
+        key: String,
+        /// New value
+        value: String,
+    },
+    /// Show config file path
+    Path,
 }
 
 #[derive(Subcommand)]
@@ -220,6 +247,24 @@ enum MigrateAction {
         #[arg(long)]
         dry_run: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum GraphAction {
+    /// Build graph from vault sessions
+    Build {
+        /// Only process sessions since this date (YYYY-MM-DD)
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Force rebuild (clear existing graph)
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show graph statistics
+    Stats,
+    /// Export graph to vault/graph/graph.json
+    Export,
 }
 
 #[tokio::main]
@@ -332,6 +377,28 @@ async fn main() -> anyhow::Result<()> {
         Commands::Migrate { action } => match action {
             MigrateAction::Summary { dry_run } => {
                 commands::migrate::run_summary(dry_run)?;
+            }
+        },
+        Commands::Graph { action } => match action {
+            GraphAction::Build { since, force } => {
+                commands::graph::run_build(since.as_deref(), force)?;
+            }
+            GraphAction::Stats => {
+                commands::graph::run_stats()?;
+            }
+            GraphAction::Export => {
+                commands::graph::run_export()?;
+            }
+        },
+        Commands::Config { action } => match action {
+            ConfigAction::Show => {
+                commands::config::run_show()?;
+            }
+            ConfigAction::Set { key, value } => {
+                commands::config::run_set(&key, &value)?;
+            }
+            ConfigAction::Path => {
+                commands::config::run_path()?;
             }
         },
     }

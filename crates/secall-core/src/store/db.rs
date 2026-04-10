@@ -5,8 +5,9 @@ use rusqlite::Connection;
 use crate::error::{Result, SecallError};
 
 use super::schema::{
-    CREATE_CONFIG, CREATE_INDEXES, CREATE_INGEST_LOG, CREATE_QUERY_CACHE, CREATE_SESSIONS,
-    CREATE_TURNS, CREATE_TURNS_FTS, CURRENT_SCHEMA_VERSION,
+    CREATE_CONFIG, CREATE_GRAPH_EDGES, CREATE_GRAPH_INDEXES, CREATE_GRAPH_NODES, CREATE_INDEXES,
+    CREATE_INGEST_LOG, CREATE_QUERY_CACHE, CREATE_SESSIONS, CREATE_TURNS, CREATE_TURNS_FTS,
+    CURRENT_SCHEMA_VERSION,
 };
 
 pub struct Database {
@@ -64,6 +65,11 @@ impl Database {
                 self.conn
                     .execute("ALTER TABLE sessions ADD COLUMN summary TEXT", [])?;
             }
+        }
+        if current < 3 {
+            self.conn.execute_batch(CREATE_GRAPH_NODES)?;
+            self.conn.execute_batch(CREATE_GRAPH_EDGES)?;
+            self.conn.execute_batch(CREATE_GRAPH_INDEXES)?;
         }
         if current < CURRENT_SCHEMA_VERSION {
             self.conn.execute(
@@ -684,7 +690,7 @@ mod tests {
     #[test]
     fn test_schema_version_stored() {
         let db = Database::open_memory().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 2);
+        assert_eq!(db.schema_version().unwrap(), 3);
     }
 
     #[test]
@@ -692,6 +698,6 @@ mod tests {
         let db = Database::open_memory().unwrap();
         // Second migrate call should not error
         db.migrate().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 2);
+        assert_eq!(db.schema_version().unwrap(), 3);
     }
 }

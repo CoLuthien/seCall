@@ -172,7 +172,7 @@ impl VectorIndexer {
 
             for (chunk, emb_opt) in chunks.iter().zip(embeddings.iter()) {
                 if let Some(embedding) = emb_opt {
-                    let rowid = db.insert_vector(
+                    let _rowid = db.insert_vector(
                         embedding,
                         &chunk.session_id,
                         chunk.turn_index,
@@ -182,7 +182,7 @@ impl VectorIndexer {
                     chunks_embedded += 1;
                     #[cfg(not(target_os = "windows"))]
                     if let Some(ref ann) = self.ann_index {
-                        if let Err(e) = ann.add(rowid as u64, embedding) {
+                        if let Err(e) = ann.add(_rowid as u64, embedding) {
                             tracing::warn!(error = %e, "ANN index add failed");
                         }
                     }

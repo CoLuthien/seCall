@@ -35,6 +35,12 @@ pub struct VaultConfig {
     pub path: PathBuf,
     #[serde(default)]
     pub git_remote: Option<String>,
+    #[serde(default = "default_branch")]
+    pub branch: String,
+}
+
+fn default_branch() -> String {
+    "main".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -83,6 +89,7 @@ impl Default for Config {
                     .join("obsidian-vault")
                     .join("seCall"),
                 git_remote: None,
+                branch: "main".to_string(),
             },
             ingest: IngestConfig::default(),
             search: SearchConfig::default(),
@@ -131,6 +138,7 @@ impl Default for VaultConfig {
                 .join("obsidian-vault")
                 .join("seCall"),
             git_remote: None,
+            branch: "main".to_string(),
         }
     }
 }

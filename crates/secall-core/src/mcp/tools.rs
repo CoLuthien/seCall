@@ -53,3 +53,13 @@ pub struct WikiSearchParams {
     /// Max results (default 5)
     pub limit: Option<usize>,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GraphQueryParams {
+    /// Node ID to query (e.g., "project:tunaflow", "tool:Edit", "session:abc12345")
+    pub node_id: String,
+    /// Max traversal depth (default: 1)
+    pub depth: Option<usize>,
+    /// Filter by relation type (e.g., "belongs_to", "uses_tool", "same_project")
+    pub relation: Option<String>,
+}

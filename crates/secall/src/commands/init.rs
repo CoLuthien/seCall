@@ -32,7 +32,7 @@ pub fn run(vault: Option<PathBuf>, git: Option<String>) -> Result<()> {
 
     // Git 초기화 (--git 옵션 제공 시)
     if let Some(remote) = git {
-        let vault_git = VaultGit::new(&vault_path);
+        let vault_git = VaultGit::new(&vault_path, &config.vault.branch);
         vault_git.init(&remote)?;
         config.vault.git_remote = Some(remote);
         config.save()?;

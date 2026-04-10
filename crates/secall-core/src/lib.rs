@@ -1,5 +1,6 @@
 // secall-core library entrypoint
 pub mod error;
+pub mod graph;
 pub mod hooks;
 pub mod ingest;
 pub mod mcp;

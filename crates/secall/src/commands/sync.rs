@@ -13,7 +13,7 @@ use super::wiki;
 
 pub async fn run(local_only: bool, dry_run: bool, no_wiki: bool) -> Result<()> {
     let config = Config::load_or_default();
-    let vault_git = VaultGit::new(&config.vault.path);
+    let vault_git = VaultGit::new(&config.vault.path, &config.vault.branch);
 
     if dry_run {
         eprintln!("[DRY RUN] No changes will be made.\n");
@@ -112,6 +112,28 @@ pub async fn run(local_only: bool, dry_run: bool, no_wiki: bool) -> Result<()> {
             }
         }
 
+        // === Phase 3.7: Graph build (새 세션 → graph 갱신) ===
+        if !ingest_result.new_session_ids.is_empty() {
+            eprintln!("Updating knowledge graph...");
+            match secall_core::graph::build::build_graph(
+                &db,
+                &config.vault.path,
+                None,  // since: 전체 증분
+                false, // force: false
+            ) {
+                Ok(result) => {
+                    eprintln!(
+                        "  ✓ graph: {} nodes, {} edges ({} sessions processed).",
+                        result.nodes_created, result.edges_created, result.sessions_processed
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "graph build failed");
+                    eprintln!("  ⚠ Graph build failed: {e}");
+                }
+            }
+        }
+
         // === Phase 4: Push (로컬 세션 공유) ===
         if !local_only && vault_git.is_git_repo() {
             eprintln!("Pushing to remote...");
@@ -144,6 +166,7 @@ pub async fn run(local_only: bool, dry_run: bool, no_wiki: bool) -> Result<()> {
                 "[DRY RUN] Phase 3.5: Would update wiki for new sessions (skip with --no-wiki)"
             );
         }
+        eprintln!("[DRY RUN] Phase 3.7: Would update knowledge graph for new sessions");
         if !local_only && vault_git.is_git_repo() {
             eprintln!(
                 "[DRY RUN] Phase 4: Would push vault changes to remote (git push origin main)"

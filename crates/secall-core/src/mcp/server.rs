@@ -8,7 +8,7 @@ use rmcp::{
 };
 
 use super::instructions::build_instructions;
-use super::tools::{GetParams, QueryType, RecallParams, StatusParams, WikiSearchParams};
+use super::tools::{GetParams, GraphQueryParams, QueryType, RecallParams, StatusParams, WikiSearchParams};
 use crate::error::SecallError;
 use crate::search::bm25::{SearchFilters, SearchResult};
 use crate::search::hybrid::{diversify_by_session, parse_temporal_filter, SearchEngine};
@@ -357,6 +357,78 @@ impl SeCallMcpServer {
 
         let count = results.len();
         let json = serde_json::json!({ "results": results, "count": count });
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&json).unwrap_or_default(),
+        )]))
+    }
+
+    /// Query knowledge graph: find neighbors and relationships of a node
+    #[tool(
+        description = "Query the knowledge graph. Find neighbors and relationships of a node (session, project, agent, tool). Use depth to expand traversal. Returns connected nodes and edge types."
+    )]
+    fn graph_query(
+        &self,
+        Parameters(params): Parameters<GraphQueryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let db = self.db.lock().map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let depth = params.depth.unwrap_or(1).min(3); // 최대 3홉
+
+        // 1홉 이웃 조회
+        let neighbors = db.get_neighbors(&params.node_id)
+            .map_err(|e| to_mcp_error(e))?;
+
+        // relation 필터 적용
+        let filtered: Vec<_> = if let Some(ref rel) = params.relation {
+            neighbors.into_iter().filter(|(_, r, _)| r == rel).collect()
+        } else {
+            neighbors
+        };
+
+        // depth > 1이면 BFS로 확장 (2홉, 3홉)
+        let mut all_neighbors = filtered.clone();
+        if depth > 1 {
+            let mut visited = std::collections::HashSet::new();
+            visited.insert(params.node_id.clone());
+            let mut frontier: Vec<String> = filtered.iter().map(|(id, _, _)| id.clone()).collect();
+
+            for _ in 1..depth {
+                let mut next_frontier = Vec::new();
+                for node in &frontier {
+                    if visited.contains(node) { continue; }
+                    visited.insert(node.clone());
+                    if let Ok(nb) = db.get_neighbors(node) {
+                        let nb_filtered: Vec<_> = if let Some(ref rel) = params.relation {
+                            nb.into_iter().filter(|(_, r, _)| r == rel).collect()
+                        } else {
+                            nb
+                        };
+                        for n in &nb_filtered {
+                            next_frontier.push(n.0.clone());
+                        }
+                        all_neighbors.extend(nb_filtered);
+                    }
+                }
+                frontier = next_frontier;
+            }
+        }
+
+        // 결과 JSON
+        let results: Vec<serde_json::Value> = all_neighbors.iter().map(|(id, rel, dir)| {
+            serde_json::json!({
+                "node_id": id,
+                "relation": rel,
+                "direction": dir,
+            })
+        }).collect();
+
+        let count = results.len();
+        let json = serde_json::json!({
+            "query_node": params.node_id,
+            "depth": depth,
+            "results": results,
+            "count": count,
+        });
+
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&json).unwrap_or_default(),
         )]))

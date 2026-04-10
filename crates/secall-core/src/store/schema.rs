@@ -1,4 +1,4 @@
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 pub const CREATE_SESSIONS: &str = "
 CREATE TABLE IF NOT EXISTS sessions (
@@ -80,4 +80,32 @@ CREATE TABLE IF NOT EXISTS query_cache (
     expanded    TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+";
+
+pub const CREATE_GRAPH_NODES: &str = "
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    id    TEXT PRIMARY KEY,
+    type  TEXT NOT NULL,
+    label TEXT NOT NULL,
+    meta  TEXT
+);
+";
+
+pub const CREATE_GRAPH_EDGES: &str = "
+CREATE TABLE IF NOT EXISTS graph_edges (
+    source     TEXT NOT NULL REFERENCES graph_nodes(id),
+    target     TEXT NOT NULL REFERENCES graph_nodes(id),
+    relation   TEXT NOT NULL,
+    confidence TEXT NOT NULL DEFAULT 'EXTRACTED',
+    weight     REAL DEFAULT 1.0,
+    meta       TEXT,
+    UNIQUE(source, target, relation)
+);
+";
+
+pub const CREATE_GRAPH_INDEXES: &str = "
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(type);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_relation ON graph_edges(relation);
 ";

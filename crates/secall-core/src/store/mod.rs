@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 pub mod db;
+pub mod graph_repo;
 pub mod schema;
 pub mod search_repo;
 pub mod session_repo;

@@ -43,7 +43,15 @@ pub async fn run_update(
         _ => "claude-sonnet-4-6",
     };
 
-    use std::io::Write as _;
+    let target = if let Some(sid) = session {
+        format!("session {}", &sid[..sid.len().min(8)])
+    } else {
+        "all sessions".to_string()
+    };
+    eprintln!("Wiki update: {} (model: {})", target, model_id);
+    eprintln!("  Launching Claude Code...");
+
+    use std::io::{BufRead, Write as _};
     use std::process::Stdio;
 
     let mut child = std::process::Command::new("claude")
@@ -51,6 +59,8 @@ pub async fn run_update(
         .arg("--allowedTools")
         .arg("mcp__secall__recall,mcp__secall__get,mcp__secall__status,mcp__secall__wiki_search,Read,Write,Edit,Glob,Grep")
         .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
         .current_dir(&config.vault.path)
         .spawn()?;
 
@@ -58,12 +68,38 @@ pub async fn run_update(
         stdin.write_all(prompt.as_bytes())?;
     }
 
+    // Stream stdout line by line so user sees progress
+    let stdout = child.stdout.take();
+    let output = if let Some(stdout) = stdout {
+        let reader = std::io::BufReader::new(stdout);
+        let mut lines = Vec::new();
+        for line in reader.lines() {
+            match line {
+                Ok(l) => {
+                    eprintln!("  | {}", l);
+                    lines.push(l);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to read claude stdout");
+                    break;
+                }
+            }
+        }
+        lines.join("\n")
+    } else {
+        String::new()
+    };
+
     let status = child.wait()?;
 
     if status.success() {
-        tracing::info!("wiki update complete");
+        eprintln!("  ✓ Wiki update complete.");
+        // Write Claude's output to wiki if it produced content
+        if !output.trim().is_empty() {
+            tracing::debug!(output_len = output.len(), "claude produced output");
+        }
     } else {
-        tracing::warn!(code = ?status.code(), "Claude Code exited with non-zero code");
+        eprintln!("  ✗ Wiki update failed (exit code: {:?}).", status.code());
     }
 
     Ok(())
