@@ -15,7 +15,7 @@ AI 에이전트와 나눈 모든 대화를 검색하세요.
 
 <br/>
 
-**`한국어`** · [**`English`**](#en)
+**`한국어`** · [**`English`**](#en) · [**`日本語`**](README.ja.md) · [**`中文`**](README.zh.md)
 
 </div>
 
@@ -53,32 +53,10 @@ AI와의 대화는 곧 지식 자산입니다. seCall은 그것을 검색 가능
 
 ### 하이브리드 검색
 
-- **BM25 전문 검색**: SQLite FTS5 + 한국어 형태소 분석 ([Lindera](https://github.com/lindera/lindera) ko-dic)
-- **벡터 시맨틱 검색**: ONNX Runtime + BGE-M3 임베딩 + **HNSW ANN 인덱스** ([usearch](https://github.com/unum-cloud/usearch))로 O(log n) 탐색
+- **BM25 전문 검색**: SQLite FTS5 + 한국어 형태소 분석 ([Lindera](https://github.com/lindera/lindera) ko-dic / [Kiwi-rs](https://github.com/bab2min/kiwi) 선택 가능)
+- **벡터 시맨틱 검색**: [Ollama](https://ollama.com/) BGE-M3 임베딩 (1024차원) + **HNSW ANN 인덱스** ([usearch](https://github.com/unum-cloud/usearch))로 O(log n) 탐색
 - **Reciprocal Rank Fusion (RRF)**: BM25/벡터 독립 실행 후 결합 (k=60) + **세션 다양성 강제** (세션당 최대 2개 턴)
 - **LLM 쿼리 확장**: Claude Code를 통한 자연어 쿼리 확장
-
-### 멀티 기기 볼트 동기화
-
-Git을 통해 여러 기기에서 지식 볼트를 동기화합니다:
-
-```bash
-# 원격 저장소 설정
-secall init --git git@github.com:you/obsidian-vault.git
-
-# 전체 동기화: git pull → reindex → ingest → wiki → git push
-secall sync
-
-# 로컬 전용 모드 (git 생략, Claude Code hook에 적합)
-secall sync --local-only
-
-# 볼트 마크다운에서 DB 복구
-secall reindex --from-vault
-```
-
-- **MD가 원본** — DB는 파생 캐시이며, 볼트에서 완전 복구 가능
-- **호스트 추적** — 각 세션이 어떤 기기에서 수집되었는지 기록 (frontmatter `host` 필드)
-- **충돌 없음** — 세션은 기기별 유니크하므로 git 머지 충돌 없음
 
 ### 지식 볼트
 
@@ -104,22 +82,9 @@ vault/
 
 세션 간 관계를 결정적으로 추출하여 지식 그래프를 구축합니다 (LLM 호출 불필요):
 
-```bash
-# 전체 그래프 빌드
-secall graph build
-
-# 통계 확인
-secall graph stats
-
-# graph.json 내보내기 (Obsidian vault에 저장)
-secall graph export
-```
-
-- **노드 타입**: session (960+), project, agent, tool — frontmatter에서 자동 추출
+- **노드 타입**: session, project, agent, tool — frontmatter에서 자동 추출
 - **엣지 타입**: `belongs_to`, `by_agent`, `uses_tool`, `same_project`, `same_day`
-- **Confidence 태깅**: 모든 엣지에 EXTRACTED 라벨 (graphify 패턴 차용)
 - **증분 빌드**: 신규 세션만 노드 추가, 관계 엣지는 전체 재계산으로 정확성 보장
-- **sync 통합**: `secall sync` 실행 시 자동으로 그래프 갱신 (Phase 3.7)
 - **MCP 도구**: `graph_query` — AI 에이전트가 세션 간 관계를 탐색 (BFS, 최대 3홉)
 
 ### MCP 서버
@@ -134,7 +99,23 @@ secall mcp
 secall mcp --http 127.0.0.1:8080
 ```
 
-제공 도구: `recall`, `get`, `status`, `wiki_search`, `graph_query` — AI 에이전트가 자신의 대화 이력, 위키 지식, 세션 간 관계 그래프를 검색할 수 있습니다.
+제공 도구: `recall`, `get`, `status`, `wiki_search`, `graph_query`
+
+### 멀티 기기 볼트 동기화
+
+Git을 통해 여러 기기에서 지식 볼트를 동기화합니다:
+
+```bash
+# 전체 동기화: git pull → reindex → ingest → wiki → graph → git push
+secall sync
+
+# 로컬 전용 모드 (git 생략, Claude Code hook에 적합)
+secall sync --local-only
+```
+
+- **MD가 원본** — DB는 파생 캐시이며, `secall reindex --from-vault`로 완전 복구 가능
+- **호스트 추적** — 각 세션이 어떤 기기에서 수집되었는지 기록 (frontmatter `host` 필드)
+- **충돌 없음** — 세션은 기기별 유니크하므로 git 머지 충돌 없음
 
 ### 데이터 무결성
 
@@ -145,15 +126,15 @@ secall lint
 # L001: 누락된 볼트 파일
 # L002: 고아 볼트 파일
 # L003: FTS 인덱스 갭
-# ...
 ```
 
 ## 빠른 시작
 
 ### 사전 요구사항
 
-- Rust 1.75+
+- Rust 1.75+ (소스 빌드 시)
 - Claude Code, Codex CLI, Gemini CLI 중 하나 이상
+- [Ollama](https://ollama.com/) — 벡터 검색용 (선택사항, 없으면 BM25만 사용)
 - **Windows**: MSVC 툴체인 (Visual Studio Build Tools)
 
 ### Step 1. 설치
@@ -170,82 +151,46 @@ cargo install --path crates/secall
 - macOS: `secall-aarch64-apple-darwin.tar.gz` / `secall-x86_64-apple-darwin.tar.gz`
 - Windows: `secall-x86_64-pc-windows-msvc.zip` (secall.exe + onnxruntime.dll)
 
-> **Windows 사용자 참고**: 핵심 기능(파싱, BM25 검색, vault, MCP)은 동일하게 동작합니다. 다만 아래 기능은 네이티브 C/C++ 의존성의 MSVC 미지원으로 현재 비활성화되어 있습니다:
-> - **HNSW ANN 인덱스** (`usearch`) — BLOB 코사인 스캔 fallback 사용. 10만 청크 이하에서 체감 차이 없음.
-> - **Kiwi-rs 형태소 분석** — Lindera ko-dic fallback 사용. 한국어 검색 품질은 유사.
->
-> upstream crate 업데이트 또는 포크 패치로 해결 가능합니다. 진행 상황은 [P13 플랜](docs/plans/secall-p13-windows.md)을 참고하세요.
+> **Windows 사용자**: 핵심 기능(파싱, BM25 검색, vault, MCP)은 동일하게 동작합니다. 아래 기능은 MSVC 미지원으로 비활성화:
+> - **HNSW ANN 인덱스** (`usearch`) — BLOB 코사인 스캔 fallback
+> - **Kiwi-rs 형태소 분석** — Lindera ko-dic fallback
 
 ### Step 2. 초기화
 
 ```bash
-# Obsidian 볼트(또는 원하는 디렉토리)를 지정
-secall init --vault ~/Documents/Obsidian\ Vault/seCall
+# 대화형 온보딩 (권장)
+secall init
 
-# 선택: 멀티 기기 동기화를 위한 Git 연동
+# 또는 인자 직접 지정
+secall init --vault ~/Documents/Obsidian\ Vault/seCall
 secall init --git git@github.com:you/obsidian-vault.git
 ```
 
-### Step 3. 모델 다운로드
+`secall init`을 인자 없이 실행하면 대화형 위저드가 시작됩니다:
+- Vault 경로 설정
+- Git remote (선택)
+- 토크나이저 선택 (lindera/kiwi)
+- 임베딩 백엔드 선택 (ollama/none)
+- Ollama 설치 확인 + `bge-m3` 모델 자동 pull
 
-시맨틱 검색에 사용되는 ONNX Runtime + BGE-M3 모델을 다운로드합니다. ONNX Runtime은 seCall에 내장되어 있어 별도 설치가 필요 없습니다.
-
-```bash
-# BGE-M3 ONNX 모델 다운로드 (~1.1GB, 최초 1회)
-secall model download
-
-# 다운로드 상태 확인
-secall model info
-
-# 모델 업데이트 체크
-secall model check-update
-```
-
-> **참고**: 모델은 `~/.cache/secall/models/bge-m3-onnx/`에 저장됩니다. 시맨틱 검색(`--vec`)을 사용하지 않는다면 이 단계를 건너뛸 수 있습니다.
-
-### Step 4. 세션 수집
+### Step 3. 세션 수집
 
 ```bash
 # Claude Code 세션 자동 감지
 secall ingest --auto
 
-# Codex CLI 세션 수집
+# Codex CLI / Gemini CLI
 secall ingest ~/.codex/sessions
-
-# Gemini CLI 세션 수집
 secall ingest ~/.gemini/sessions
 
-# claude.ai export 수집 (ZIP 또는 추출된 JSON)
-secall ingest ~/Downloads/data-2026-04-06.zip
+# claude.ai / ChatGPT export (ZIP)
+secall ingest ~/Downloads/data-export.zip
 
-# ChatGPT export 수집 (ZIP 또는 conversations.json)
-secall ingest ~/Downloads/chatgpt-export.zip
-
-# 이미 수집된 세션 강제 재수집 (vault MD 재생성 + DB 갱신)
-secall ingest --auto --force
-
-# 또는 한 명령으로 전체 동기화 (pull + reindex + ingest + push)
+# 또는 한 명령으로 전체 동기화
 secall sync
 ```
 
-### Step 5. 임베딩 생성
-
-시맨틱 검색을 위해 세션 벡터 인덱스를 생성합니다.
-
-```bash
-# 신규/변경된 세션만 임베딩
-secall embed
-
-# 전체 재임베딩
-secall embed --all
-
-# 성능 옵션 (M1 Max 기준 권장값)
-secall embed --concurrency 4 --batch-size 32
-```
-
-> **참고**: Step 3에서 모델을 다운로드하지 않았다면, 첫 `embed` 실행 시 자동으로 다운로드합니다.
-
-### Step 6. 검색
+### Step 4. 검색
 
 ```bash
 # BM25 전문 검색
@@ -254,12 +199,14 @@ secall recall "BM25 인덱싱 구현"
 # 프로젝트, 에이전트, 날짜 필터
 secall recall "에러 처리" --project seCall --agent claude-code --since 2026-04-01
 
-# 벡터 시맨틱 검색 (Step 3, 5 필요)
+# 벡터 시맨틱 검색 (Ollama 필요)
 secall recall "검색 파이프라인 동작 방식" --vec
 
 # LLM 쿼리 확장
 secall recall "검색 정확도 개선" --expand
 ```
+
+## 사용법
 
 ### 세션 조회
 
@@ -274,6 +221,23 @@ secall get <session-id> --full
 secall get <session-id>:5
 ```
 
+### 임베딩 생성
+
+시맨틱 검색(`--vec`)을 사용하려면 벡터 인덱스가 필요합니다. Ollama가 설치되어 있으면 `secall embed` 또는 `secall sync` 실행 시 자동으로 임베딩됩니다.
+
+```bash
+# 신규/변경된 세션만 임베딩
+secall embed
+
+# 전체 재임베딩
+secall embed --all
+
+# 성능 옵션 (M1 Max 기준 권장값)
+secall embed --concurrency 4 --batch-size 32
+```
+
+> ONNX Runtime을 사용하려면 `secall config set embedding.backend ort` 후 `secall model download`로 모델을 다운로드하세요.
+
 ### 위키 생성
 
 ```bash
@@ -283,6 +247,108 @@ secall wiki update
 # 위키 상태 확인
 secall wiki status
 ```
+
+### Knowledge Graph
+
+```bash
+# 전체 그래프 빌드
+secall graph build
+
+# 통계 확인
+secall graph stats
+
+# graph.json 내보내기
+secall graph export
+```
+
+## 설정
+
+`secall config` 명령으로 설정을 관리합니다. config.toml을 직접 편집할 필요가 없습니다.
+
+```bash
+# 현재 설정 확인
+secall config show
+
+# 설정 변경
+secall config set output.timezone Asia/Seoul
+secall config set search.tokenizer kiwi
+secall config set embedding.backend ollama
+
+# 설정 파일 경로 확인
+secall config path
+```
+
+### 설정 키 목록
+
+| 키 | 설명 | 기본값 |
+|---|---|---|
+| `vault.path` | Obsidian vault 경로 | `~/obsidian-vault/seCall` |
+| `vault.git_remote` | Git remote URL | (없음) |
+| `vault.branch` | Git 브랜치 이름 | `main` |
+| `search.tokenizer` | 토크나이저 (`lindera` / `kiwi`) | `lindera` |
+| `search.default_limit` | 검색 결과 수 | `10` |
+| `embedding.backend` | 임베딩 백엔드 (`ollama` / `ort` / `none`) | `ollama` |
+| `embedding.ollama_model` | Ollama 모델 이름 | `bge-m3` |
+| `output.timezone` | 타임존 (IANA) | `UTC` |
+
+설정 파일 경로:
+- **macOS**: `~/Library/Application Support/secall/config.toml`
+- **Linux**: `~/.config/secall/config.toml`
+- **Windows**: `%APPDATA%\secall\config.toml`
+
+## CLI 레퍼런스
+
+| 명령 | 설명 |
+|---|---|
+| `secall init` | 대화형 온보딩 (vault, 토크나이저, 임베딩 설정) |
+| `secall ingest [path] --auto` | 에이전트 세션 파싱 및 인덱싱 |
+| `secall sync [--local-only] [--no-wiki]` | 전체 동기화: git pull → reindex → ingest → wiki → graph → git push |
+| `secall recall <query>` | 하이브리드 검색 |
+| `secall get <id> [--full]` | 세션 상세 조회 |
+| `secall status` | 인덱스 통계 + 설정 요약 |
+| `secall embed [--all]` | 벡터 임베딩 생성 |
+| `secall lint` | 인덱스/볼트 정합성 검증 |
+| `secall mcp [--http <addr>]` | MCP 서버 시작 |
+| `secall config show\|set\|path` | 설정 확인/변경 |
+| `secall graph build\|stats\|export` | Knowledge Graph 관리 |
+| `secall wiki update\|status` | 위키 생성/상태 확인 |
+| `secall model download\|info\|check` | ONNX 모델 관리 |
+| `secall reindex --from-vault` | 볼트에서 DB 재구축 |
+| `secall migrate summary` | summary frontmatter 일괄 추가 |
+
+## MCP 연동
+
+Claude Code 설정 (`~/.claude/settings.json`)에 추가:
+
+```json
+{
+  "mcpServers": {
+    "secall": {
+      "command": "secall",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+세션 시작/종료 시 자동 동기화:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Initialize",
+      "hooks": [{"type": "command", "command": "secall sync --local-only"}]
+    }],
+    "PostToolUse": [{
+      "matcher": "Exit",
+      "hooks": [{"type": "command", "command": "secall sync"}]
+    }]
+  }
+}
+```
+
+> 자세한 설정 안내는 [GitHub 볼트 동기화 가이드](docs/reference/github-vault-sync.md)를 참고하세요.
 
 ## 아키텍처
 
@@ -332,89 +398,19 @@ secall wiki status
 | 데이터베이스 | SQLite + FTS5 (rusqlite, bundled) |
 | 한국어 NLP | Lindera ko-dic + Kiwi-rs 형태소 분석 (macOS/Linux) |
 | 플랫폼 | macOS, Windows (x86_64), Linux (CI) |
-| 임베딩 | ONNX Runtime + BGE-M3 (384차원) |
+| 임베딩 | Ollama BGE-M3 (1024차원) / ONNX Runtime (선택) |
+| ANN 인덱스 | usearch HNSW (macOS/Linux) |
 | MCP 서버 | rmcp (stdio + Streamable HTTP / axum) |
 | 볼트 | Obsidian 호환 Markdown |
 | 위키 엔진 | Claude Code 메타에이전트 |
-
-## 설정
-
-설정 파일 경로:
-- **macOS**: `~/Library/Application Support/secall/config.toml`
-- **Linux**: `~/.config/secall/config.toml`
-- **Windows**: `%APPDATA%\secall\config.toml`
-
-아래 옵션을 설정할 수 있습니다:
-
-```toml
-[output]
-timezone = "Asia/Seoul"    # 기본값: UTC (IANA 타임존 이름)
-```
-
-타임존 설정 시 vault 마크다운의 모든 타임스탬프(frontmatter `date`, `start_time`, `end_time`, 턴 시각, 디렉토리 경로)가 해당 타임존으로 변환됩니다. 내부 DB 및 원본 데이터는 UTC로 유지됩니다.
-
-## CLI 레퍼런스
-
-| 명령 | 설명 |
-|---|---|
-| `secall init [--git <remote>]` | 볼트, 설정, 데이터베이스 초기화 |
-| `secall ingest [path] --auto [--min-turns N]` | 에이전트 세션 파싱 및 인덱싱 |
-| `secall sync [--local-only] [--no-wiki]` | 전체 동기화: git pull → reindex → ingest → wiki → graph → git push |
-| `secall reindex --from-vault` | 볼트 마크다운에서 DB 재구축 |
-| `secall recall <query>` | 하이브리드 검색 |
-| `secall get <id>` | 세션 상세 조회 |
-| `secall status` | 인덱스 통계 |
-| `secall embed [--all] [--concurrency N] [--batch-size N]` | 벡터 임베딩 생성 (기본: concurrency=4, batch-size=32) |
-| `secall lint` | 인덱스/볼트 정합성 검증 |
-| `secall mcp` | MCP 서버 시작 |
-| `secall model download` | BGE-M3 ONNX 모델 다운로드 |
-| `secall wiki update` | Claude Code 메타에이전트로 위키 생성 |
-| `secall graph build [--since] [--force]` | Knowledge Graph 빌드 (결정적 추출) |
-| `secall graph stats` | 그래프 통계 (노드/엣지 수, 타입별 분포) |
-| `secall graph export` | graph.json 내보내기 |
-| `secall migrate summary` | 기존 세션에 summary frontmatter 일괄 추가 |
-
-## MCP 연동
-
-Claude Code 설정 (`~/.claude/settings.json`)에 추가:
-
-```json
-{
-  "mcpServers": {
-    "secall": {
-      "command": "secall",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-세션 시작/종료 시 자동 동기화:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [{
-      "matcher": "Initialize",
-      "hooks": [{"type": "command", "command": "secall sync --local-only"}]
-    }],
-    "PostToolUse": [{
-      "matcher": "Exit",
-      "hooks": [{"type": "command", "command": "secall sync"}]
-    }]
-  }
-}
-```
-
-> 자세한 설정 안내는 [GitHub 볼트 동기화 가이드](docs/reference/github-vault-sync.md)를 참고하세요.
 
 ## 출처
 
 이 프로젝트는 다음 아이디어와 프로젝트를 기반으로 합니다:
 
-- **[LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** (Andrej Karpathy) — LLM을 사용하여 원본 소스로부터 지속적이고 상호 연결된 지식 베이스를 점진적으로 구축하는 패턴. seCall의 2계층 볼트 아키텍처(원본 세션 + AI 생성 위키)는 이 컨셉을 직접 구현한 것입니다. [Tobi Lütke의 구현](https://github.com/tobi/llm-wiki)도 참고.
-- **[qmd](https://github.com/tobi/qmd)** (Tobi Lütke) — 마크다운 파일을 위한 로컬 검색 엔진으로, BM25/벡터 하이브리드 검색을 지원합니다. seCall의 검색 파이프라인(FTS5 BM25, 벡터 임베딩, RRF k=60)은 qmd의 접근 방식을 참고하여 설계되었습니다.
-- **[graphify](https://github.com/safishamsi/graphify)** (Safi Shamsi) — 파일 폴더를 knowledge graph로 변환하는 도구. 2-패스 추출(결정적 AST + 시맨틱 LLM), confidence 태깅(EXTRACTED/INFERRED/AMBIGUOUS), 커뮤니티 탐지 기법을 참고. seCall P16의 결정적 그래프 추출과 confidence 라벨링은 이 프로젝트에서 영감을 받았습니다.
+- **[LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** (Andrej Karpathy) — LLM을 사용하여 원본 소스로부터 점진적으로 지식 베이스를 구축하는 패턴. seCall의 2계층 볼트 아키텍처(원본 세션 + AI 생성 위키)는 이 컨셉을 직접 구현한 것입니다. [Tobi Lütke의 구현](https://github.com/tobi/llm-wiki)도 참고.
+- **[qmd](https://github.com/tobi/qmd)** (Tobi Lütke) — 마크다운 파일을 위한 로컬 검색 엔진. seCall의 검색 파이프라인(FTS5 BM25, 벡터 임베딩, RRF k=60)은 qmd의 접근 방식을 참고하여 설계되었습니다.
+- **[graphify](https://github.com/safishamsi/graphify)** (Safi Shamsi) — 파일 폴더를 knowledge graph로 변환하는 도구. seCall P16의 결정적 그래프 추출과 confidence 라벨링은 이 프로젝트에서 영감을 받았습니다.
 
 이 프로젝트는 AI 코딩 에이전트(Claude Code, Codex)를 [tunaFlow](https://github.com/hang-in/tunaFlow) 멀티에이전트 워크플로우 플랫폼으로 오케스트레이션하여 개발되었습니다.
 
@@ -428,7 +424,7 @@ Claude Code 설정 (`~/.claude/settings.json`)에 추가:
 
 <div align="center">
 
-[**`한국어`**](#secall) · **`English`**
+[**`한국어`**](#secall) · **`English`** · [**`日本語`**](README.ja.md) · [**`中文`**](README.zh.md)
 
 </div>
 
@@ -464,32 +460,10 @@ Parse and normalize sessions from multiple AI coding agents into a unified forma
 
 ### Hybrid Search
 
-- **BM25 full-text search** powered by SQLite FTS5 with Korean morpheme tokenization ([Lindera](https://github.com/lindera/lindera) ko-dic)
-- **Vector semantic search** using ONNX Runtime with BGE-M3 embeddings + **HNSW ANN index** ([usearch](https://github.com/unum-cloud/usearch)) for O(log n) lookups
+- **BM25 full-text search** powered by SQLite FTS5 with Korean morpheme tokenization ([Lindera](https://github.com/lindera/lindera) ko-dic / [Kiwi-rs](https://github.com/bab2min/kiwi) selectable)
+- **Vector semantic search** using [Ollama](https://ollama.com/) BGE-M3 embeddings (1024-dim) + **HNSW ANN index** ([usearch](https://github.com/unum-cloud/usearch)) for O(log n) lookups
 - **Reciprocal Rank Fusion (RRF)** with independent BM25/vector execution (k=60) + **session-level diversity** (max 2 turns per session)
 - **LLM query expansion** for natural language queries via Claude Code
-
-### Multi-Device Vault Sync
-
-Sync your knowledge vault across machines via Git:
-
-```bash
-# Initialize with a remote repository
-secall init --git git@github.com:you/obsidian-vault.git
-
-# Full sync: git pull → reindex → ingest → wiki → git push
-secall sync
-
-# Local-only mode (skip git, useful for Claude Code hooks)
-secall sync --local-only
-
-# Recover DB from vault markdown files
-secall reindex --from-vault
-```
-
-- **MD as source of truth** — DB is a derived cache, fully recoverable from vault
-- **Host tracking** — each session records which machine ingested it (`host` field in frontmatter)
-- **No conflicts** — sessions are unique per device, so git merges are always clean
 
 ### Knowledge Vault
 
@@ -515,22 +489,9 @@ vault/
 
 Deterministically extract relationships between sessions to build a knowledge graph (no LLM calls needed):
 
-```bash
-# Build entire graph
-secall graph build
-
-# View statistics
-secall graph stats
-
-# Export graph.json (saved to Obsidian vault)
-secall graph export
-```
-
-- **Node types**: session (960+), project, agent, tool — auto-extracted from frontmatter
+- **Node types**: session, project, agent, tool — auto-extracted from frontmatter
 - **Edge types**: `belongs_to`, `by_agent`, `uses_tool`, `same_project`, `same_day`
-- **Confidence tagging**: all edges labeled EXTRACTED (inspired by graphify)
 - **Incremental builds**: new sessions get nodes added; relation edges are fully recomputed for accuracy
-- **Sync integration**: `secall sync` automatically updates the graph (Phase 3.7)
 - **MCP tool**: `graph_query` — AI agents can explore session relationships (BFS, max 3 hops)
 
 ### MCP Server
@@ -545,7 +506,23 @@ secall mcp
 secall mcp --http 127.0.0.1:8080
 ```
 
-Tools provided: `recall`, `get`, `status`, `wiki_search`, `graph_query` — letting your AI agent search its own conversation history, wiki knowledge pages, and session relationship graph.
+Tools provided: `recall`, `get`, `status`, `wiki_search`, `graph_query`
+
+### Multi-Device Vault Sync
+
+Sync your knowledge vault across machines via Git:
+
+```bash
+# Full sync: git pull → reindex → ingest → wiki → graph → git push
+secall sync
+
+# Local-only mode (skip git, useful for Claude Code hooks)
+secall sync --local-only
+```
+
+- **MD as source of truth** — DB is a derived cache, fully recoverable via `secall reindex --from-vault`
+- **Host tracking** — each session records which machine ingested it (`host` field in frontmatter)
+- **No conflicts** — sessions are unique per device, so git merges are always clean
 
 ### Data Integrity
 
@@ -556,15 +533,15 @@ secall lint
 # L001: Missing vault files
 # L002: Orphan vault files
 # L003: FTS index gaps
-# ...
 ```
 
 ## Quick Start
 
 ### Prerequisites
 
-- Rust 1.75+
+- Rust 1.75+ (for building from source)
 - At least one of: Claude Code, Codex CLI, Gemini CLI
+- [Ollama](https://ollama.com/) — for vector search (optional; BM25-only without it)
 - **Windows**: MSVC toolchain (Visual Studio Build Tools)
 
 ### Step 1. Install
@@ -581,96 +558,62 @@ cargo install --path crates/secall
 - macOS: `secall-aarch64-apple-darwin.tar.gz` / `secall-x86_64-apple-darwin.tar.gz`
 - Windows: `secall-x86_64-pc-windows-msvc.zip` (secall.exe + onnxruntime.dll)
 
-> **Windows users**: Core features (parsing, BM25 search, vault, MCP) work identically. However, the following features are currently disabled due to upstream C/C++ dependency issues with MSVC:
-> - **HNSW ANN index** (`usearch`) — Falls back to BLOB cosine scan. No noticeable difference under 100k chunks.
-> - **Kiwi-rs morpheme analysis** — Falls back to Lindera ko-dic. Korean search quality is comparable.
->
-> These can be resolved by upstream crate updates or fork patches. See [P13 plan](docs/plans/secall-p13-windows.md) for details.
+> **Windows users**: Core features (parsing, BM25 search, vault, MCP) work identically. The following are disabled due to MSVC limitations:
+> - **HNSW ANN index** (`usearch`) — falls back to BLOB cosine scan
+> - **Kiwi-rs morpheme analysis** — falls back to Lindera ko-dic
 
 ### Step 2. Initialize
 
 ```bash
-# Point to your Obsidian vault (or any directory)
-secall init --vault ~/Documents/Obsidian\ Vault/seCall
+# Interactive onboarding (recommended)
+secall init
 
-# Optional: enable Git sync for multi-device use
+# Or specify arguments directly
+secall init --vault ~/Documents/Obsidian\ Vault/seCall
 secall init --git git@github.com:you/obsidian-vault.git
 ```
 
-### Step 3. Download Model
+Running `secall init` without arguments starts an interactive wizard:
+- Vault path setup
+- Git remote (optional)
+- Tokenizer selection (lindera/kiwi)
+- Embedding backend selection (ollama/none)
+- Ollama installation check + automatic `bge-m3` model pull
 
-Download the ONNX Runtime + BGE-M3 model used for semantic search. ONNX Runtime is bundled with seCall — no separate installation needed.
-
-```bash
-# Download BGE-M3 ONNX model (~1.1GB, one-time)
-secall model download
-
-# Check download status
-secall model info
-
-# Check for model updates
-secall model check-update
-```
-
-> **Note**: The model is stored at `~/.cache/secall/models/bge-m3-onnx/`. You can skip this step if you don't plan to use semantic search (`--vec`).
-
-### Step 4. Ingest Sessions
+### Step 3. Ingest Sessions
 
 ```bash
 # Auto-detect Claude Code sessions
 secall ingest --auto
 
-# Ingest Codex CLI sessions
+# Codex CLI / Gemini CLI
 secall ingest ~/.codex/sessions
-
-# Ingest Gemini CLI sessions
 secall ingest ~/.gemini/sessions
 
-# Ingest claude.ai export (ZIP or extracted JSON)
-secall ingest ~/Downloads/data-2026-04-06.zip
+# claude.ai / ChatGPT export (ZIP)
+secall ingest ~/Downloads/data-export.zip
 
-# Ingest ChatGPT export (ZIP or conversations.json)
-secall ingest ~/Downloads/chatgpt-export.zip
-
-# Force re-ingest already-indexed sessions (regenerate vault MD + update DB)
-secall ingest --auto --force
-
-# Or sync everything in one command (pull + reindex + ingest + push)
+# Or sync everything in one command
 secall sync
 ```
 
-### Step 5. Build Embeddings
-
-Generate vector indexes for semantic search.
-
-```bash
-# Embed new/changed sessions only
-secall embed
-
-# Re-embed all sessions
-secall embed --all
-
-# Performance tuning (recommended for M1 Max)
-secall embed --concurrency 4 --batch-size 32
-```
-
-> **Note**: If the model was not downloaded in Step 3, the first `embed` run will download it automatically.
-
-### Step 6. Search
+### Step 4. Search
 
 ```bash
 # BM25 full-text search
-secall recall "BM25 인덱싱 구현"
+secall recall "BM25 indexing implementation"
 
 # Filter by project, agent, date
-secall recall "에러 처리" --project seCall --agent claude-code --since 2026-04-01
+secall recall "error handling" --project seCall --agent claude-code --since 2026-04-01
 
-# Vector-only semantic search (requires Steps 3 & 5)
+# Vector semantic search (requires Ollama)
 secall recall "how does the search pipeline work" --vec
 
 # LLM-expanded query
-secall recall "검색 정확도 개선" --expand
+secall recall "improve search accuracy" --expand
 ```
+
+## Usage
 
 ### Retrieve a Session
 
@@ -685,6 +628,23 @@ secall get <session-id> --full
 secall get <session-id>:5
 ```
 
+### Build Embeddings
+
+For semantic search (`--vec`), vector indexes are needed. With Ollama installed, `secall embed` or `secall sync` will generate embeddings automatically.
+
+```bash
+# Embed new/changed sessions only
+secall embed
+
+# Re-embed all sessions
+secall embed --all
+
+# Performance tuning (recommended for M1 Max)
+secall embed --concurrency 4 --batch-size 32
+```
+
+> To use ONNX Runtime instead: `secall config set embedding.backend ort` then `secall model download`.
+
 ### Generate Wiki
 
 ```bash
@@ -694,6 +654,108 @@ secall wiki update
 # Check wiki status
 secall wiki status
 ```
+
+### Knowledge Graph
+
+```bash
+# Build entire graph
+secall graph build
+
+# View statistics
+secall graph stats
+
+# Export graph.json
+secall graph export
+```
+
+## Configuration
+
+Manage settings via the `secall config` command. No need to edit config.toml directly.
+
+```bash
+# View current settings
+secall config show
+
+# Change a setting
+secall config set output.timezone Asia/Seoul
+secall config set search.tokenizer kiwi
+secall config set embedding.backend ollama
+
+# Show config file path
+secall config path
+```
+
+### Available Keys
+
+| Key | Description | Default |
+|---|---|---|
+| `vault.path` | Obsidian vault path | `~/obsidian-vault/seCall` |
+| `vault.git_remote` | Git remote URL | (none) |
+| `vault.branch` | Git branch name | `main` |
+| `search.tokenizer` | Tokenizer (`lindera` / `kiwi`) | `lindera` |
+| `search.default_limit` | Search result count | `10` |
+| `embedding.backend` | Embedding backend (`ollama` / `ort` / `none`) | `ollama` |
+| `embedding.ollama_model` | Ollama model name | `bge-m3` |
+| `output.timezone` | Timezone (IANA) | `UTC` |
+
+Config file location:
+- **macOS**: `~/Library/Application Support/secall/config.toml`
+- **Linux**: `~/.config/secall/config.toml`
+- **Windows**: `%APPDATA%\secall\config.toml`
+
+## CLI Reference
+
+| Command | Description |
+|---|---|
+| `secall init` | Interactive onboarding (vault, tokenizer, embedding setup) |
+| `secall ingest [path] --auto` | Parse and index agent sessions |
+| `secall sync [--local-only] [--no-wiki]` | Full sync: git pull → reindex → ingest → wiki → graph → git push |
+| `secall recall <query>` | Hybrid search across sessions |
+| `secall get <id> [--full]` | Retrieve session details |
+| `secall status` | Index statistics + settings summary |
+| `secall embed [--all]` | Generate vector embeddings |
+| `secall lint` | Verify index/vault integrity |
+| `secall mcp [--http <addr>]` | Start MCP server |
+| `secall config show\|set\|path` | View/change settings |
+| `secall graph build\|stats\|export` | Knowledge graph management |
+| `secall wiki update\|status` | Wiki generation/status |
+| `secall model download\|info\|check` | ONNX model management |
+| `secall reindex --from-vault` | Rebuild DB from vault |
+| `secall migrate summary` | Backfill summary frontmatter |
+
+## MCP Integration
+
+Add to your Claude Code settings (`~/.claude/settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "secall": {
+      "command": "secall",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+For auto-sync on session start/end:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Initialize",
+      "hooks": [{"type": "command", "command": "secall sync --local-only"}]
+    }],
+    "PostToolUse": [{
+      "matcher": "Exit",
+      "hooks": [{"type": "command", "command": "secall sync"}]
+    }]
+  }
+}
+```
+
+> See [GitHub Vault Sync Guide](docs/reference/github-vault-sync.md) for detailed setup instructions.
 
 ## Architecture
 
@@ -743,87 +805,19 @@ secall wiki status
 | Database | SQLite with FTS5 (rusqlite, bundled) |
 | Korean NLP | Lindera ko-dic + Kiwi-rs morpheme analysis (macOS/Linux) |
 | Platforms | macOS, Windows (x86_64), Linux (CI) |
-| Embeddings | ONNX Runtime + BGE-M3 (384-dim) |
+| Embeddings | Ollama BGE-M3 (1024-dim) / ONNX Runtime (optional) |
+| ANN Index | usearch HNSW (macOS/Linux) |
 | MCP Server | rmcp (stdio + Streamable HTTP via axum) |
 | Vault | Obsidian-compatible Markdown |
 | Wiki Engine | Claude Code meta-agent |
-
-## Configuration
-
-Config file location:
-- **macOS**: `~/Library/Application Support/secall/config.toml`
-- **Linux**: `~/.config/secall/config.toml`
-- **Windows**: `%APPDATA%\secall\config.toml`
-
-```toml
-[output]
-timezone = "Asia/Seoul"    # Default: UTC (IANA timezone name)
-```
-
-When set, all timestamps in vault markdown (frontmatter `date`, `start_time`, `end_time`, turn timestamps, and directory paths) are rendered in the specified timezone. Internal DB and raw data remain in UTC.
-
-## CLI Reference
-
-| Command | Description |
-|---|---|
-| `secall init [--git <remote>]` | Initialize vault, config, and database |
-| `secall ingest [path] --auto [--min-turns N]` | Parse and index agent sessions |
-| `secall sync [--local-only] [--no-wiki]` | Full sync: git pull → reindex → ingest → wiki → graph → git push |
-| `secall reindex --from-vault` | Rebuild DB from vault markdown files |
-| `secall recall <query>` | Hybrid search across sessions |
-| `secall get <id>` | Retrieve session details |
-| `secall status` | Show index statistics |
-| `secall embed [--all] [--concurrency N] [--batch-size N]` | Generate vector embeddings (default: concurrency=4, batch-size=32) |
-| `secall lint` | Verify index/vault integrity |
-| `secall mcp` | Start MCP server |
-| `secall model download` | Download BGE-M3 ONNX model |
-| `secall wiki update` | Generate wiki via Claude Code |
-| `secall graph build [--since] [--force]` | Build knowledge graph (deterministic extraction) |
-| `secall graph stats` | Graph statistics (node/edge counts by type) |
-| `secall graph export` | Export graph.json |
-| `secall migrate summary` | Backfill summary frontmatter for existing sessions |
-
-## MCP Integration
-
-Add to your Claude Code settings (`~/.claude/settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "secall": {
-      "command": "secall",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-For auto-sync on session start/end:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [{
-      "matcher": "Initialize",
-      "hooks": [{"type": "command", "command": "secall sync --local-only"}]
-    }],
-    "PostToolUse": [{
-      "matcher": "Exit",
-      "hooks": [{"type": "command", "command": "secall sync"}]
-    }]
-  }
-}
-```
-
-> See [GitHub Vault Sync Guide](docs/reference/github-vault-sync.md) for detailed setup instructions.
 
 ## Acknowledgments
 
 This project is built on ideas from:
 
-- **[LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** by Andrej Karpathy — The pattern of using LLMs to incrementally build and maintain a persistent, interlinked knowledge base from raw sources. seCall's two-layer vault architecture (raw sessions + AI-generated wiki) directly implements this concept. See also [Tobi Lütke's implementation](https://github.com/tobi/llm-wiki).
-- **[qmd](https://github.com/tobi/qmd)** by Tobi Lütke — A local search engine for markdown files with hybrid BM25/vector search. seCall's search pipeline (FTS5 BM25, vector embeddings, Reciprocal Rank Fusion with k=60) was designed with reference to qmd's approach.
-- **[graphify](https://github.com/safishamsi/graphify)** by Safi Shamsi — Turns file folders into queryable knowledge graphs. Two-pass extraction (deterministic AST + semantic LLM), confidence tagging (EXTRACTED/INFERRED/AMBIGUOUS), and community detection. seCall P16's deterministic graph extraction and confidence labeling were inspired by this project.
+- **[LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)** by Andrej Karpathy — The pattern of using LLMs to incrementally build a persistent, interlinked knowledge base from raw sources. seCall's two-layer vault architecture (raw sessions + AI-generated wiki) directly implements this concept. See also [Tobi Lütke's implementation](https://github.com/tobi/llm-wiki).
+- **[qmd](https://github.com/tobi/qmd)** by Tobi Lütke — A local search engine for markdown files with hybrid BM25/vector search. seCall's search pipeline (FTS5 BM25, vector embeddings, RRF k=60) was designed with reference to qmd's approach.
+- **[graphify](https://github.com/safishamsi/graphify)** by Safi Shamsi — Turns file folders into queryable knowledge graphs. seCall P16's deterministic graph extraction and confidence labeling were inspired by this project.
 
 This project was developed using AI coding agents (Claude Code, Codex) orchestrated via [tunaFlow](https://github.com/hang-in/tunaFlow), a multi-agent workflow platform.
 
@@ -833,27 +827,24 @@ This project was developed using AI coding agents (Claude Code, Codex) orchestra
 
 ## Updates
 
-| 날짜 | 버전 | 내용 |
-|------|------|------|
-| 2026-04-10 | P16 | Knowledge Graph — frontmatter 기반 결정적 그래프 추출 (960 세션 → 1,076 노드, 4,663 엣지), `secall graph build/stats/export`, MCP `graph_query` 도구, sync Phase 3.7 자동 통합 |
-| 2026-04-09 | P15 | Windows 런타임 수정 — Ollama NaN 내성 임베딩 (부분 성공 허용), 크로스플랫폼 `command_exists`, sync 충돌 상태 preflight 체크 |
-| 2026-04-09 | P14 | 검색 품질 개선 — 벡터 검색 독립 실행 (BM25 후보 제한 제거), 세션 레벨 결과 다양성 (세션당 최대 2개 턴) |
-| 2026-04-09 | P13 | Windows 빌드 지원 — `x86_64-pc-windows-msvc` CI/Release 추가, ORT DLL 번들링, `tokenizers` onig→fancy-regex, kiwi-rs 조건부 컴파일 |
-| 2026-04-09 | v0.2.3 | ChatGPT export 파서 — `conversations.json` (ZIP) 파싱, mapping tree 선형화, 멀티 content type 지원 |
-| 2026-04-08 | v0.2.2 | 타임존 설정 — `config.toml` `[output] timezone` 으로 vault 타임스탬프 IANA 타임존 변환 |
-| 2026-04-08 | v0.2.1 | `--force` 재수집 옵션 + Dataview `::` 이스케이프 + AGPL-3.0 LICENSE |
-| 2026-04-07 | P11 | 임베딩 성능 최적화 — ORT session pool, batch inference, 병렬 처리, DB 트랜잭션 (49h → ~3-4h, 12-15x 개선) |
-| 2026-04-07 | P10 | 세션 `summary` frontmatter 추가 — 첫 User 턴 기반 자동 생성, `secall migrate summary`로 기존 세션 backfill |
-| 2026-04-07 | P9 | ChatGPT export 파서 — `conversations.json` mapping tree 선형화, 14종 content type 지원 |
-| 2026-04-06 | P8 | 안정화 + GitHub Actions 릴리스 워크플로우, IngestError 구조화 |
-| 2026-04-06 | P7 | `--min-turns`, `embed --all`, `wiki_search` MCP 도구, incremental wiki, `--no-wiki` |
-| 2026-04-05 | v0.2 | claude.ai export 파서, ZIP 자동 해제 |
-| 2026-04-05 | P6 | ANN 인덱스 (usearch HNSW), 성능 개선 |
-| 2026-04-04 | P5 | 멀티 기기 vault Git 동기화, `secall sync`, `reindex --from-vault` |
-| 2026-04-03 | P4 | SecallError typed error, Repository 패턴, usearch ANN |
-| 2026-04-02 | P3 | 품질 기반 리팩토링, 즉시 실행 개선 |
-| 2026-04-01 | P2 | 인프라 + 성능, lint 규칙, 프롬프트 튜닝 |
-| 2026-03-31 | MVP | 초기 릴리스 — Claude Code/Codex/Gemini 파서, BM25+벡터 검색, MCP 서버, Obsidian 볼트 |
+| Date | Version | Changes |
+|------|---------|---------|
+| 2026-04-10 | P17 | Interactive onboarding (`secall init` wizard), `secall config` CLI, git branch configuration |
+| 2026-04-10 | P16 | Knowledge Graph — deterministic graph extraction from frontmatter, `secall graph build/stats/export`, MCP `graph_query`, sync Phase 3.7 |
+| 2026-04-09 | P15 | Windows runtime fixes — Ollama NaN tolerance, cross-platform `command_exists`, sync conflict preflight |
+| 2026-04-09 | P14 | Search quality — independent vector execution, session-level result diversity |
+| 2026-04-09 | P13 | Windows build support — `x86_64-pc-windows-msvc` CI/Release, ORT DLL bundling |
+| 2026-04-09 | v0.2.3 | ChatGPT export parser — `conversations.json` (ZIP), mapping tree linearization |
+| 2026-04-08 | v0.2.2 | Timezone configuration — IANA timezone conversion for vault timestamps |
+| 2026-04-08 | v0.2.1 | `--force` re-ingest + Dataview `::` escaping + AGPL-3.0 LICENSE |
+| 2026-04-07 | P11 | Embedding performance — ORT session pool, batch inference, parallelism (49h → ~3-4h) |
+| 2026-04-07 | P10 | Session `summary` frontmatter — auto-generated from first user turn |
+| 2026-04-06 | P8 | Stabilization + GitHub Actions release workflow |
+| 2026-04-06 | P7 | `--min-turns`, `embed --all`, `wiki_search` MCP tool, `--no-wiki` |
+| 2026-04-05 | v0.2 | claude.ai export parser, ZIP auto-extraction |
+| 2026-04-05 | P6 | ANN index (usearch HNSW) |
+| 2026-04-04 | P5 | Multi-device vault Git sync, `secall sync`, `reindex --from-vault` |
+| 2026-03-31 | MVP | Initial release — Claude Code/Codex/Gemini parsers, BM25+vector search, MCP server, Obsidian vault |
 
 ---
 
