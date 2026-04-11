@@ -1,0 +1,17 @@
+pub mod claude;
+pub mod lmstudio;
+pub mod ollama;
+
+pub use claude::ClaudeBackend;
+pub use lmstudio::LmStudioBackend;
+pub use ollama::OllamaBackend;
+
+/// wiki 생성 프롬프트를 LLM에 전달하고 결과를 반환하는 추상 인터페이스
+#[async_trait::async_trait]
+pub trait WikiBackend: Send + Sync {
+    /// 프롬프트를 전달하고 LLM 응답 텍스트를 반환한다.
+    async fn generate(&self, prompt: &str) -> anyhow::Result<String>;
+
+    /// 백엔드 이름 (로그/표시용)
+    fn name(&self) -> &'static str;
+}

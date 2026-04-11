@@ -37,6 +37,8 @@ pub struct Session {
     pub end_time: Option<DateTime<Utc>>,
     pub turns: Vec<Turn>,
     pub total_tokens: TokenUsage,
+    /// 세션 분류 레이블 (e.g. "interactive", "automated"). 기본값: "interactive"
+    pub session_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

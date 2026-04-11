@@ -128,6 +128,7 @@ mod tests {
             end_time: None,
             turns,
             total_tokens: TokenUsage::default(),
+            session_type: "interactive".to_string(),
         }
     }
 

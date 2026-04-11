@@ -262,6 +262,7 @@ fn conversation_to_session(conv: &Conversation) -> crate::error::Result<Session>
         end_time: last_msg_time,
         turns,
         total_tokens: TokenUsage::default(),
+        session_type: "interactive".to_string(),
     })
 }
 

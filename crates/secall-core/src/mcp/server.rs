@@ -64,6 +64,7 @@ impl SeCallMcpServer {
             agent: params.agent,
             since: None,
             until: None,
+            exclude_session_types: vec!["automated".to_string()],
             ..Default::default()
         };
 

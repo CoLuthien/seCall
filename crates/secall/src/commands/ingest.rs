@@ -151,6 +151,19 @@ pub async fn ingest_sessions(
     // BM25/vault 완료 후 벡터 임베딩을 일괄 처리하기 위한 수집 목록.
     let mut vector_tasks: Vec<secall_core::ingest::Session> = Vec::new();
 
+    let compiled_rules: Vec<(regex::Regex, String)> = {
+        let classification = &config.ingest.classification;
+        classification
+            .rules
+            .iter()
+            .map(|rule| {
+                regex::Regex::new(&rule.pattern)
+                    .map(|re| (re, rule.session_type.clone()))
+                    .map_err(|e| anyhow::anyhow!("invalid regex pattern {:?}: {}", rule.pattern, e))
+            })
+            .collect::<anyhow::Result<_>>()?
+    };
+
     for session_path in &paths {
         // detect_parser()를 한 번 호출 — 포맷 탐지와 라우팅을 동시에 결정
         let parser = match detect_parser(session_path) {
@@ -181,6 +194,7 @@ pub async fn ingest_sessions(
                     for session in sessions {
                         ingest_single_session(
                             config,
+                            &compiled_rules,
                             db,
                             engine,
                             vault,
@@ -243,6 +257,7 @@ pub async fn ingest_sessions(
             Ok(session) => {
                 ingest_single_session(
                     config,
+                    &compiled_rules,
                     db,
                     engine,
                     vault,
@@ -307,10 +322,11 @@ pub async fn ingest_sessions(
 #[allow(clippy::too_many_arguments)]
 fn ingest_single_session(
     config: &Config,
+    compiled_rules: &[(regex::Regex, String)],
     db: &Database,
     engine: &SearchEngine,
     vault: &Vault,
-    session: secall_core::ingest::Session,
+    mut session: secall_core::ingest::Session,
     format: &OutputFormat,
     min_turns: usize,
     force: bool,
@@ -326,6 +342,29 @@ fn ingest_single_session(
     if min_turns > 0 && session.turns.len() < min_turns {
         *skipped_min_turns += 1;
         return;
+    }
+
+    // 세션 분류: 첫 번째 user turn의 내용을 규칙과 매칭
+    {
+        let classification = &config.ingest.classification;
+        if !compiled_rules.is_empty() {
+            let first_user_content = session
+                .turns
+                .iter()
+                .find(|t| t.role == secall_core::ingest::Role::User)
+                .map(|t| t.content.as_str())
+                .unwrap_or("");
+
+            let matched_type = compiled_rules.iter().find_map(|(re, session_type)| {
+                if re.is_match(first_user_content) {
+                    Some(session_type.clone())
+                } else {
+                    None
+                }
+            });
+
+            session.session_type = matched_type.unwrap_or_else(|| classification.default.clone());
+        }
     }
 
     // 실제 session.id 기준 중복 체크 (--force 시 기존 데이터 삭제 후 재삽입)
@@ -419,8 +458,15 @@ fn ingest_single_session(
         tracing::warn!(session = &session.id[..8.min(session.id.len())], error = %e, "post-ingest hook failed");
     }
 
-    // 3. 벡터 임베딩을 위해 수집
-    vector_tasks.push(session);
+    // 3. 벡터 임베딩을 위해 수집 (skip_embed_types에 포함된 session_type은 제외)
+    let skip_embed = config
+        .ingest
+        .classification
+        .skip_embed_types
+        .contains(&session.session_type);
+    if !skip_embed {
+        vector_tasks.push(session);
+    }
 }
 
 fn collect_paths(path: Option<&str>, auto: bool, cwd: Option<&Path>) -> Result<Vec<PathBuf>> {

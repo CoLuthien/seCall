@@ -25,6 +25,8 @@ pub struct SearchFilters {
     pub until: Option<DateTime<Utc>>,
     /// 세션당 최대 결과 수 (None = 제한 없음)
     pub max_per_session: Option<usize>,
+    /// 제외할 session_type 목록 (빈 Vec = 제외 없음)
+    pub exclude_session_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +36,7 @@ pub struct SessionMeta {
     pub project: Option<String>,
     pub date: String,
     pub vault_path: Option<String>,
+    pub session_type: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,8 +214,8 @@ impl SessionRepo for Database {
         let summary = extract_summary(session);
 
         self.conn().execute(
-            "INSERT OR IGNORE INTO sessions(id, agent, model, project, cwd, git_branch, host, start_time, end_time, turn_count, tokens_in, tokens_out, tools_used, tags, summary, ingested_at, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            "INSERT OR IGNORE INTO sessions(id, agent, model, project, cwd, git_branch, host, start_time, end_time, turn_count, tokens_in, tokens_out, tools_used, tags, summary, ingested_at, status, session_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             rusqlite::params![
                 session.id,
                 session.agent.as_str(),
@@ -231,6 +234,7 @@ impl SessionRepo for Database {
                 summary,
                 Utc::now().to_rfc3339(),
                 "raw",
+                &session.session_type,
             ],
         )?;
         Ok(())
@@ -308,7 +312,7 @@ impl SessionRepo for Database {
     fn get_session_meta(&self, session_id: &str) -> crate::error::Result<SessionMeta> {
         self.conn()
             .query_row(
-                "SELECT agent, model, project, start_time, vault_path FROM sessions WHERE id = ?1",
+                "SELECT agent, model, project, start_time, vault_path, session_type FROM sessions WHERE id = ?1",
                 [session_id],
                 |row| {
                     let start_time: String = row.get(3)?;
@@ -319,6 +323,7 @@ impl SessionRepo for Database {
                         project: row.get(2)?,
                         date,
                         vault_path: row.get(4)?,
+                        session_type: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
                     })
                 },
             )
@@ -356,28 +361,59 @@ impl SearchRepo for Database {
         let since_str = filters.since.map(|dt| dt.to_rfc3339());
         let until_str = filters.until.map(|dt| dt.to_rfc3339());
 
-        let mut stmt = self.conn().prepare(
+        // session_type 제외 조건 동적 생성 — 고정 파라미터 4개 이후부터 ?5, ?6, ...
+        let exclude_clause = if filters.exclude_session_types.is_empty() {
+            String::new()
+        } else {
+            let placeholders: String = (0..filters.exclude_session_types.len())
+                .map(|i| format!("?{}", i + 5))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "AND (sessions.session_type IS NULL OR sessions.session_type NOT IN ({placeholders}))"
+            )
+        };
+
+        let sql = format!(
             "SELECT turns_fts.session_id, turns_fts.turn_id, turns_fts.content, bm25(turns_fts) as score
              FROM turns_fts
              JOIN sessions ON turns_fts.session_id = sessions.id
              WHERE turns_fts.content MATCH ?1
                AND (?2 IS NULL OR sessions.start_time >= ?2)
                AND (?3 IS NULL OR sessions.start_time < ?3)
+               {exclude_clause}
              ORDER BY score
-             LIMIT ?4",
-        )?;
+             LIMIT ?4"
+        );
 
-        let rows = stmt.query_map(
-            rusqlite::params![tokenized_query, since_str, until_str, limit as i64],
-            |row| {
-                Ok(FtsRow {
-                    session_id: row.get(0)?,
-                    turn_index: row.get::<_, i64>(1)? as u32,
-                    content: row.get(2)?,
-                    score: -row.get::<_, f64>(3)?,
-                })
-            },
-        )?;
+        // 고정 파라미터 + exclude_session_types 동적 파라미터
+        let fixed: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(tokenized_query.to_string()),
+            Box::new(since_str),
+            Box::new(until_str),
+            Box::new(limit as i64),
+        ];
+        let exclude: Vec<Box<dyn rusqlite::types::ToSql>> = filters
+            .exclude_session_types
+            .iter()
+            .map(|t| -> Box<dyn rusqlite::types::ToSql> { Box::new(t.clone()) })
+            .collect();
+
+        let all_params: Vec<&dyn rusqlite::types::ToSql> = fixed
+            .iter()
+            .chain(exclude.iter())
+            .map(|b| b.as_ref())
+            .collect();
+
+        let mut stmt = self.conn().prepare(&sql)?;
+        let rows = stmt.query_map(all_params.as_slice(), |row| {
+            Ok(FtsRow {
+                session_id: row.get(0)?,
+                turn_index: row.get::<_, i64>(1)? as u32,
+                content: row.get(2)?,
+                score: -row.get::<_, f64>(3)?,
+            })
+        })?;
 
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(SecallError::Database)
@@ -403,6 +439,7 @@ mod tests {
             host: None,
             start_time: Utc.with_ymd_and_hms(2026, 4, 5, 0, 0, 0).unwrap(),
             end_time: None,
+            session_type: "interactive".to_string(),
             turns: vec![Turn {
                 index: 0,
                 role: Role::User,
@@ -508,6 +545,7 @@ mod tests {
                 })
                 .collect(),
             total_tokens: TokenUsage::default(),
+            session_type: "interactive".to_string(),
         }
     }
 

@@ -83,6 +83,10 @@ enum Commands {
         /// Expand query using Claude Code (requires claude CLI)
         #[arg(long)]
         expand: bool,
+
+        /// Include automated sessions in search results (excluded by default)
+        #[arg(long)]
+        include_automated: bool,
     },
 
     /// Get a specific session or turn
@@ -111,6 +115,13 @@ enum Commands {
         /// Number of sessions to embed concurrently (default: 4)
         #[arg(long, default_value = "4")]
         concurrency: usize,
+    },
+
+    /// Classify sessions using config rules (backfill existing sessions)
+    Classify {
+        /// Preview changes without writing to DB
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Verify index and vault integrity
@@ -218,9 +229,13 @@ enum ModelAction {
 enum WikiAction {
     /// Run wiki update using Claude Code as meta-agent
     Update {
-        /// Model: opus or sonnet
+        /// Model: opus or sonnet (Claude 백엔드 전용)
         #[arg(long, default_value = "sonnet")]
         model: String,
+
+        /// Backend: claude | ollama | lmstudio (기본값: config wiki.default_backend)
+        #[arg(long)]
+        backend: Option<String>,
 
         /// Only process sessions since this date (YYYY-MM-DD)
         #[arg(long)]
@@ -303,6 +318,7 @@ async fn main() -> anyhow::Result<()> {
             lex,
             vec,
             expand,
+            include_automated,
         } => {
             commands::recall::run(
                 query,
@@ -313,6 +329,7 @@ async fn main() -> anyhow::Result<()> {
                 lex,
                 vec,
                 expand,
+                include_automated,
                 &cli.format,
             )
             .await?;
@@ -329,6 +346,9 @@ async fn main() -> anyhow::Result<()> {
             concurrency,
         } => {
             commands::embed::run(all, batch_size, concurrency).await?;
+        }
+        Commands::Classify { dry_run } => {
+            commands::classify::run_backfill(dry_run).await?;
         }
         Commands::Lint { json, errors_only } => {
             commands::lint::run(json, errors_only)?;
@@ -363,12 +383,19 @@ async fn main() -> anyhow::Result<()> {
         Commands::Wiki { action } => match action {
             WikiAction::Update {
                 model,
+                backend,
                 since,
                 session,
                 dry_run,
             } => {
-                commands::wiki::run_update(&model, since.as_deref(), session.as_deref(), dry_run)
-                    .await?;
+                commands::wiki::run_update(
+                    &model,
+                    backend.as_deref(),
+                    since.as_deref(),
+                    session.as_deref(),
+                    dry_run,
+                )
+                .await?;
             }
             WikiAction::Status => {
                 commands::wiki::run_status()?;

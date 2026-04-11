@@ -12,6 +12,7 @@ pub struct Config {
     pub hooks: HooksConfig,
     pub embedding: EmbeddingConfig,
     pub output: OutputConfig,
+    pub wiki: WikiConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -48,6 +49,7 @@ fn default_branch() -> String {
 pub struct IngestConfig {
     pub tool_output_max_chars: usize,
     pub thinking_included: bool,
+    pub classification: ClassificationConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -80,6 +82,94 @@ pub struct HooksConfig {
     pub hook_timeout_secs: Option<u64>,
 }
 
+/// 개별 백엔드 설정 (LM Studio, Ollama, Claude 공용)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WikiBackendConfig {
+    /// API 엔드포인트 (Claude 백엔드는 사용 안 함)
+    pub api_url: Option<String>,
+    /// 모델 이름
+    pub model: Option<String>,
+    /// 최대 생성 토큰 수
+    #[serde(default = "default_wiki_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_wiki_max_tokens() -> u32 {
+    4096
+}
+
+impl Default for WikiBackendConfig {
+    fn default() -> Self {
+        WikiBackendConfig {
+            api_url: None,
+            model: None,
+            max_tokens: default_wiki_max_tokens(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WikiConfig {
+    /// 기본 사용 백엔드: "claude" | "ollama" | "lmstudio"
+    #[serde(default = "default_wiki_backend")]
+    pub default_backend: String,
+    /// 백엔드별 설정 맵
+    #[serde(default)]
+    pub backends: std::collections::HashMap<String, WikiBackendConfig>,
+}
+
+fn default_wiki_backend() -> String {
+    "claude".to_string()
+}
+
+impl Default for WikiConfig {
+    fn default() -> Self {
+        WikiConfig {
+            default_backend: default_wiki_backend(),
+            backends: std::collections::HashMap::new(),
+        }
+    }
+}
+
+/// 단일 세션 분류 규칙
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ClassificationRule {
+    /// 첫 번째 user turn 내용에 매칭할 regex 패턴
+    pub pattern: String,
+    /// 매칭 시 부여할 session_type (예: "automated", "health_check")
+    pub session_type: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ClassificationConfig {
+    /// 규칙에 매칭되지 않을 때 기본 session_type
+    #[serde(default = "default_session_type")]
+    pub default: String,
+    /// 순서대로 매칭 시도, 첫 번째 매칭 규칙 적용
+    #[serde(default)]
+    pub rules: Vec<ClassificationRule>,
+    /// 임베딩을 skip할 session_type 목록
+    #[serde(default)]
+    pub skip_embed_types: Vec<String>,
+}
+
+fn default_session_type() -> String {
+    "interactive".to_string()
+}
+
+impl Default for ClassificationConfig {
+    fn default() -> Self {
+        ClassificationConfig {
+            default: default_session_type(),
+            rules: Vec::new(),
+            skip_embed_types: Vec::new(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -96,6 +186,7 @@ impl Default for Config {
             hooks: HooksConfig::default(),
             embedding: EmbeddingConfig::default(),
             output: OutputConfig::default(),
+            wiki: WikiConfig::default(),
         }
     }
 }
@@ -105,6 +196,7 @@ impl Default for IngestConfig {
         IngestConfig {
             tool_output_max_chars: 500,
             thinking_included: true,
+            classification: ClassificationConfig::default(),
         }
     }
 }
@@ -144,6 +236,11 @@ impl Default for VaultConfig {
 }
 
 impl Config {
+    /// 특정 백엔드의 설정을 반환한다. 없으면 기본값.
+    pub fn wiki_backend_config(&self, name: &str) -> WikiBackendConfig {
+        self.wiki.backends.get(name).cloned().unwrap_or_default()
+    }
+
     /// 설정된 타임존을 chrono_tz::Tz로 파싱.
     /// 잘못된 값이면 UTC로 fallback + 경고 로그.
     pub fn timezone(&self) -> chrono_tz::Tz {

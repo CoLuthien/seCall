@@ -1,3 +1,5 @@
+<!-- Thanks to: @batmania52, @yeonsh, @missflash -->
+
 <div align="center">
 
 # seCall
@@ -238,14 +240,63 @@ secall embed --concurrency 4 --batch-size 32
 
 > ONNX Runtime을 사용하려면 `secall config set embedding.backend ort` 후 `secall model download`로 모델을 다운로드하세요.
 
+### 세션 분류
+
+config에서 정의한 regex 규칙으로 수집 시 세션을 자동 태깅합니다:
+
+```toml
+[ingest.classification]
+default = "interactive"
+skip_embed_types = ["automated"]   # 이 타입은 벡터 임베딩 생략
+
+[[ingest.classification.rules]]
+pattern = "^\\[당월 rawdata\\]"
+session_type = "automated"
+
+[[ingest.classification.rules]]
+pattern = "^# Wiki Incremental Update Prompt"
+session_type = "automated"
+```
+
+- **수집 시 자동 분류** — 첫 번째 user turn 내용을 rules 순서대로 매칭 (첫 번째 매칭 적용)
+- **임베딩 선택적 스킵** — `skip_embed_types`에 지정된 타입은 벡터 임베딩 생략으로 비용 절감
+- **검색 필터** — `recall` 및 MCP `recall` 도구가 기본적으로 `automated` 세션 제외 (`--include-automated` 플래그로 포함 가능)
+- **소급 분류** — `secall classify --dry-run` / `secall classify`로 기존 세션 일괄 재분류
+
 ### 위키 생성
 
 ```bash
-# Claude Code가 세션을 분석하고 위키 페이지를 생성
+# Claude Code로 위키 업데이트 (기본값)
 secall wiki update
+
+# 로컬 LLM 백엔드 사용
+secall wiki update --backend ollama
+secall wiki update --backend lmstudio
+
+# 특정 세션만 증분 업데이트
+secall wiki update --backend lmstudio --session <id>
 
 # 위키 상태 확인
 secall wiki status
+```
+
+백엔드는 config로도 설정할 수 있습니다:
+
+```toml
+[wiki]
+default_backend = "lmstudio"   # "claude" | "ollama" | "lmstudio"
+
+[wiki.backends.lmstudio]
+api_url = "http://localhost:1234"
+model = "lmstudio-community/gemma-4-e4b-it"
+max_tokens = 3000
+
+[wiki.backends.ollama]
+api_url = "http://localhost:11434"
+model = "gemma3:27b"
+
+[wiki.backends.claude]
+model = "sonnet"   # "opus" 도 가능
 ```
 
 ### Knowledge Graph
@@ -290,6 +341,12 @@ secall config path
 | `embedding.backend` | 임베딩 백엔드 (`ollama` / `ort` / `none`) | `ollama` |
 | `embedding.ollama_model` | Ollama 모델 이름 | `bge-m3` |
 | `output.timezone` | 타임존 (IANA) | `UTC` |
+| `ingest.classification.default` | 분류 규칙 미매칭 시 기본 session_type | `interactive` |
+| `ingest.classification.skip_embed_types` | 임베딩을 스킵할 session_type 목록 | `[]` |
+| `wiki.default_backend` | 위키 생성 백엔드 (`claude` / `ollama` / `lmstudio`) | `claude` |
+| `wiki.backends.<name>.api_url` | 백엔드 API 엔드포인트 | (기본값 사용) |
+| `wiki.backends.<name>.model` | 백엔드 모델 이름 | (기본값 사용) |
+| `wiki.backends.<name>.max_tokens` | 최대 생성 토큰 수 | `4096` |
 
 설정 파일 경로:
 - **macOS**: `~/Library/Application Support/secall/config.toml`
@@ -303,15 +360,18 @@ secall config path
 | `secall init` | 대화형 온보딩 (vault, 토크나이저, 임베딩 설정) |
 | `secall ingest [path] --auto` | 에이전트 세션 파싱 및 인덱싱 |
 | `secall sync [--local-only] [--no-wiki]` | 전체 동기화: git pull → reindex → ingest → wiki → graph → git push |
-| `secall recall <query>` | 하이브리드 검색 |
+| `secall recall <query>` | 하이브리드 검색 (기본: automated 세션 제외) |
+| `secall recall <query> --include-automated` | automated 세션 포함하여 검색 |
 | `secall get <id> [--full]` | 세션 상세 조회 |
 | `secall status` | 인덱스 통계 + 설정 요약 |
 | `secall embed [--all]` | 벡터 임베딩 생성 |
+| `secall classify [--dry-run]` | config 규칙으로 기존 세션 일괄 재분류 |
 | `secall lint` | 인덱스/볼트 정합성 검증 |
 | `secall mcp [--http <addr>]` | MCP 서버 시작 |
 | `secall config show\|set\|path` | 설정 확인/변경 |
 | `secall graph build\|stats\|export` | Knowledge Graph 관리 |
-| `secall wiki update\|status` | 위키 생성/상태 확인 |
+| `secall wiki update [--backend claude\|ollama\|lmstudio]` | 위키 생성 (백엔드 선택 가능) |
+| `secall wiki status` | 위키 상태 확인 |
 | `secall model download\|info\|check` | ONNX 모델 관리 |
 | `secall reindex --from-vault` | 볼트에서 DB 재구축 |
 | `secall migrate summary` | summary frontmatter 일괄 추가 |
@@ -402,7 +462,7 @@ Claude Code 설정 (`~/.claude/settings.json`)에 추가:
 | ANN 인덱스 | usearch HNSW (macOS/Linux) |
 | MCP 서버 | rmcp (stdio + Streamable HTTP / axum) |
 | 볼트 | Obsidian 호환 Markdown |
-| 위키 엔진 | Claude Code 메타에이전트 |
+| 위키 엔진 | Claude Code / Ollama / LM Studio (플러그인 방식 백엔드) |
 
 ## 출처
 
@@ -481,7 +541,7 @@ vault/
     └── graph.json   # Node/edge data
 ```
 
-- **Wiki generation** via Claude Code meta-agent (`secall wiki update`)
+- **Wiki generation** via pluggable LLM backends (`secall wiki update --backend claude|ollama|lmstudio`)
 - **Obsidian backlinks** (`[[]]`) connecting sessions ↔ wiki pages
 - Frontmatter metadata for Dataview queries (`summary` field for at-a-glance session identification)
 
@@ -645,14 +705,56 @@ secall embed --concurrency 4 --batch-size 32
 
 > To use ONNX Runtime instead: `secall config set embedding.backend ort` then `secall model download`.
 
+### Session Classification
+
+Tag sessions automatically during ingest using config-driven regex rules:
+
+```toml
+[ingest.classification]
+default = "interactive"
+skip_embed_types = ["automated"]   # skip vector embedding for these types
+
+[[ingest.classification.rules]]
+pattern = "^\\[monthly rawdata\\]"
+session_type = "automated"
+```
+
+- Rules are matched against the first user turn (first match wins)
+- `skip_embed_types` skips vector embedding for cost savings
+- `recall` and MCP `recall` exclude `automated` sessions by default (`--include-automated` to override)
+- `secall classify [--dry-run]` backfills existing sessions
+
 ### Generate Wiki
 
 ```bash
-# Claude Code analyzes sessions and generates wiki pages
+# Use Claude Code (default)
 secall wiki update
+
+# Use a local LLM backend
+secall wiki update --backend ollama
+secall wiki update --backend lmstudio
+
+# Incremental update for one session
+secall wiki update --backend lmstudio --session <id>
 
 # Check wiki status
 secall wiki status
+```
+
+Configure the default backend in `config.toml`:
+
+```toml
+[wiki]
+default_backend = "lmstudio"   # "claude" | "ollama" | "lmstudio"
+
+[wiki.backends.lmstudio]
+api_url = "http://localhost:1234"
+model = "lmstudio-community/gemma-4-e4b-it"
+max_tokens = 3000
+
+[wiki.backends.ollama]
+api_url = "http://localhost:11434"
+model = "gemma3:27b"
 ```
 
 ### Knowledge Graph
@@ -697,6 +799,12 @@ secall config path
 | `embedding.backend` | Embedding backend (`ollama` / `ort` / `none`) | `ollama` |
 | `embedding.ollama_model` | Ollama model name | `bge-m3` |
 | `output.timezone` | Timezone (IANA) | `UTC` |
+| `ingest.classification.default` | Default session_type when no rule matches | `interactive` |
+| `ingest.classification.skip_embed_types` | Session types to skip vector embedding | `[]` |
+| `wiki.default_backend` | Wiki generation backend (`claude` / `ollama` / `lmstudio`) | `claude` |
+| `wiki.backends.<name>.api_url` | Backend API endpoint | (default) |
+| `wiki.backends.<name>.model` | Model name for the backend | (default) |
+| `wiki.backends.<name>.max_tokens` | Max tokens to generate | `4096` |
 
 Config file location:
 - **macOS**: `~/Library/Application Support/secall/config.toml`
@@ -710,15 +818,18 @@ Config file location:
 | `secall init` | Interactive onboarding (vault, tokenizer, embedding setup) |
 | `secall ingest [path] --auto` | Parse and index agent sessions |
 | `secall sync [--local-only] [--no-wiki]` | Full sync: git pull → reindex → ingest → wiki → graph → git push |
-| `secall recall <query>` | Hybrid search across sessions |
+| `secall recall <query>` | Hybrid search (automated sessions excluded by default) |
+| `secall recall <query> --include-automated` | Search including automated sessions |
 | `secall get <id> [--full]` | Retrieve session details |
 | `secall status` | Index statistics + settings summary |
 | `secall embed [--all]` | Generate vector embeddings |
+| `secall classify [--dry-run]` | Backfill session types using config rules |
 | `secall lint` | Verify index/vault integrity |
 | `secall mcp [--http <addr>]` | Start MCP server |
 | `secall config show\|set\|path` | View/change settings |
 | `secall graph build\|stats\|export` | Knowledge graph management |
-| `secall wiki update\|status` | Wiki generation/status |
+| `secall wiki update [--backend claude\|ollama\|lmstudio]` | Wiki generation with backend selection |
+| `secall wiki status` | Wiki status |
 | `secall model download\|info\|check` | ONNX model management |
 | `secall reindex --from-vault` | Rebuild DB from vault |
 | `secall migrate summary` | Backfill summary frontmatter |
@@ -809,7 +920,7 @@ For auto-sync on session start/end:
 | ANN Index | usearch HNSW (macOS/Linux) |
 | MCP Server | rmcp (stdio + Streamable HTTP via axum) |
 | Vault | Obsidian-compatible Markdown |
-| Wiki Engine | Claude Code meta-agent |
+| Wiki Engine | Claude Code / Ollama / LM Studio (pluggable backends) |
 
 ## Acknowledgments
 

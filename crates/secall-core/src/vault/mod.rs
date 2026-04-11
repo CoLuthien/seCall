@@ -118,6 +118,7 @@ mod tests {
                 output: 50,
                 cached: 0,
             },
+            session_type: "interactive".to_string(),
         }
     }
 
@@ -301,6 +302,7 @@ pub mod integration {
                     is_sidechain: false,
                 }],
                 total_tokens: TokenUsage::default(),
+                session_type: "interactive".to_string(),
             })
             .collect();
 

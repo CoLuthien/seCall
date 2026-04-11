@@ -334,6 +334,11 @@ pub fn passes_filters(meta: &SessionMeta, filters: &SearchFilters) -> bool {
             }
         }
     }
+    if !filters.exclude_session_types.is_empty()
+        && filters.exclude_session_types.contains(&meta.session_type)
+    {
+        return false;
+    }
     true
 }
 

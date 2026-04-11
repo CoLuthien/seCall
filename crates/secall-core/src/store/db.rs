@@ -71,6 +71,12 @@ impl Database {
             self.conn.execute_batch(CREATE_GRAPH_EDGES)?;
             self.conn.execute_batch(CREATE_GRAPH_INDEXES)?;
         }
+        if current < 4 && !self.column_exists("sessions", "session_type")? {
+            self.conn.execute(
+                "ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'interactive'",
+                [],
+            )?;
+        }
         if current < CURRENT_SCHEMA_VERSION {
             self.conn.execute(
                 "INSERT OR REPLACE INTO config(key, value) VALUES ('schema_version', ?1)",
@@ -475,10 +481,11 @@ impl Database {
             end_time_str,
             tokens_in,
             tokens_out,
+            session_type,
         ) = self
             .conn
             .query_row(
-                "SELECT agent, model, project, cwd, start_time, end_time, tokens_in, tokens_out
+                "SELECT agent, model, project, cwd, start_time, end_time, tokens_in, tokens_out, session_type
                  FROM sessions WHERE id = ?1",
                 [session_id],
                 |row| {
@@ -491,6 +498,7 @@ impl Database {
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, i64>(6)?,
                         row.get::<_, i64>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
@@ -576,6 +584,7 @@ impl Database {
                 output: tokens_out as u64,
                 cached: 0,
             },
+            session_type: session_type.unwrap_or_else(|| "interactive".to_string()),
         })
     }
 
@@ -600,6 +609,43 @@ impl Database {
             "INSERT OR REPLACE INTO query_cache(query_hash, original, expanded, created_at)
              VALUES (?1, ?2, ?3, datetime('now'))",
             rusqlite::params![hash, query, expanded],
+        )?;
+        Ok(())
+    }
+
+    /// 전체 세션의 (id, cwd, project, agent, 첫 user turn content) 반환 (backfill용)
+    #[allow(clippy::type_complexity)]
+    pub fn get_all_sessions_for_classify(
+        &self,
+    ) -> Result<Vec<(String, Option<String>, Option<String>, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.cwd, s.project, s.agent, COALESCE(t.content, '')
+             FROM sessions s
+             LEFT JOIN turns t ON t.session_id = s.id AND t.turn_index = (
+                 SELECT MIN(t2.turn_index) FROM turns t2
+                 WHERE t2.session_id = s.id AND t2.role = 'user'
+             )",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// 세션의 session_type 업데이트
+    pub fn update_session_type(&self, session_id: &str, session_type: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET session_type = ?1 WHERE id = ?2",
+            rusqlite::params![session_type, session_id],
         )?;
         Ok(())
     }
@@ -690,7 +736,7 @@ mod tests {
     #[test]
     fn test_schema_version_stored() {
         let db = Database::open_memory().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 3);
+        assert_eq!(db.schema_version().unwrap(), 4);
     }
 
     #[test]
@@ -698,6 +744,6 @@ mod tests {
         let db = Database::open_memory().unwrap();
         // Second migrate call should not error
         db.migrate().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 3);
+        assert_eq!(db.schema_version().unwrap(), 4);
     }
 }

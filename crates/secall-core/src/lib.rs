@@ -7,6 +7,7 @@ pub mod mcp;
 pub mod search;
 pub mod store;
 pub mod vault;
+pub mod wiki;
 
 pub use error::{Result, SecallError};
 

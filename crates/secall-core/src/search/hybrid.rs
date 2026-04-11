@@ -301,6 +301,7 @@ mod tests {
                 project: None,
                 date: "2026-04-05".to_string(),
                 vault_path: None,
+                session_type: "interactive".to_string(),
             },
         }
     }
@@ -468,6 +469,7 @@ mod integration {
                 is_sidechain: false,
             }],
             total_tokens: TokenUsage::default(),
+            session_type: "interactive".to_string(),
         }
     }
 

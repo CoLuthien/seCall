@@ -5,6 +5,7 @@ use secall_core::vault::Config;
 
 pub async fn run_update(
     model: &str,
+    backend: Option<&str>,
     since: Option<&str>,
     session: Option<&str>,
     dry_run: bool,
@@ -29,77 +30,63 @@ pub async fn run_update(
         return Ok(());
     }
 
-    // 4. Check claude CLI exists
-    if !secall_core::command_exists("claude") {
-        anyhow::bail!(
-            "Claude Code CLI not found in PATH. \
-             Install: https://docs.anthropic.com/claude-code"
-        );
-    }
-
-    // 5. Execute Claude Code
-    let model_id = match model {
-        "opus" => "claude-opus-4-6",
-        _ => "claude-sonnet-4-6",
-    };
+    // 4. 백엔드 선택: --backend 플래그 → config wiki.default_backend → "claude"
+    let backend_name = backend
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| config.wiki.default_backend.clone());
 
     let target = if let Some(sid) = session {
         format!("session {}", &sid[..sid.len().min(8)])
     } else {
         "all sessions".to_string()
     };
-    eprintln!("Wiki update: {} (model: {})", target, model_id);
-    eprintln!("  Launching Claude Code...");
+    eprintln!("Wiki update: {} (backend: {})", target, backend_name);
 
-    use std::io::{BufRead, Write as _};
-    use std::process::Stdio;
-
-    let mut child = std::process::Command::new("claude")
-        .args(["-p", "--model", model_id])
-        .arg("--allowedTools")
-        .arg("mcp__secall__recall,mcp__secall__get,mcp__secall__status,mcp__secall__wiki_search,Read,Write,Edit,Glob,Grep")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .current_dir(&config.vault.path)
-        .spawn()?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(prompt.as_bytes())?;
-    }
-
-    // Stream stdout line by line so user sees progress
-    let stdout = child.stdout.take();
-    let output = if let Some(stdout) = stdout {
-        let reader = std::io::BufReader::new(stdout);
-        let mut lines = Vec::new();
-        for line in reader.lines() {
-            match line {
-                Ok(l) => {
-                    eprintln!("  | {}", l);
-                    lines.push(l);
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to read claude stdout");
-                    break;
-                }
-            }
+    // 5. WikiBackend 인스턴스 생성
+    let backend_box: Box<dyn secall_core::wiki::WikiBackend> = match backend_name.as_str() {
+        "ollama" => {
+            let cfg = config.wiki_backend_config("ollama");
+            Box::new(secall_core::wiki::OllamaBackend {
+                api_url: cfg
+                    .api_url
+                    .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                model: cfg.model.unwrap_or_else(|| "llama3".to_string()),
+                max_tokens: cfg.max_tokens,
+            })
         }
-        lines.join("\n")
-    } else {
-        String::new()
+        "lmstudio" => {
+            let cfg = config.wiki_backend_config("lmstudio");
+            Box::new(secall_core::wiki::LmStudioBackend {
+                api_url: cfg
+                    .api_url
+                    .unwrap_or_else(|| "http://localhost:1234".to_string()),
+                model: cfg.model.unwrap_or_else(|| "local-model".to_string()),
+                max_tokens: cfg.max_tokens,
+            })
+        }
+        "claude" => Box::new(secall_core::wiki::ClaudeBackend {
+            model: model.to_string(),
+            vault_path: config.vault.path.clone(),
+        }),
+        _ => {
+            anyhow::bail!(
+                "Unknown backend '{}'. Supported: claude, ollama, lmstudio",
+                backend_name
+            );
+        }
     };
 
-    let status = child.wait()?;
+    // 6. 생성 실행
+    eprintln!("  Launching {}...", backend_box.name());
+    let output = backend_box.generate(&prompt).await?;
 
-    if status.success() {
-        eprintln!("  ✓ Wiki update complete.");
-        // Write Claude's output to wiki if it produced content
-        if !output.trim().is_empty() {
-            tracing::debug!(output_len = output.len(), "claude produced output");
-        }
-    } else {
-        eprintln!("  ✗ Wiki update failed (exit code: {:?}).", status.code());
+    eprintln!("  ✓ Wiki update complete.");
+    if !output.trim().is_empty() {
+        tracing::debug!(
+            output_len = output.len(),
+            backend = backend_name,
+            "wiki backend produced output"
+        );
     }
 
     Ok(())

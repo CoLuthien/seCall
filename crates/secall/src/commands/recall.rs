@@ -20,6 +20,7 @@ pub async fn run(
     lex_only: bool,
     vec_only: bool,
     expand: bool,
+    include_automated: bool,
     format: &OutputFormat,
 ) -> Result<()> {
     if query.is_empty() {
@@ -47,11 +48,17 @@ pub async fn run(
     } else {
         (None, None)
     };
+    let exclude_session_types = if include_automated {
+        vec![]
+    } else {
+        vec!["automated".to_string()]
+    };
     let filters = SearchFilters {
         project,
         agent,
         since: since_filter,
         until: until_filter,
+        exclude_session_types,
         ..Default::default()
     };
 

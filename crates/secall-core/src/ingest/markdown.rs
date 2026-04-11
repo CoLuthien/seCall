@@ -419,6 +419,7 @@ mod tests {
                 output: 12000,
                 cached: 0,
             },
+            session_type: "interactive".to_string(),
         }
     }
 

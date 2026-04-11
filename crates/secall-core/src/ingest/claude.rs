@@ -284,6 +284,7 @@ pub fn parse_claude_jsonl(path: &Path) -> Result<Session> {
         end_time,
         turns,
         total_tokens,
+        session_type: "interactive".to_string(),
     })
 }
 

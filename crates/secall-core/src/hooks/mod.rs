@@ -170,6 +170,7 @@ mod tests {
                 is_sidechain: false,
             }],
             total_tokens: TokenUsage::default(),
+            session_type: "interactive".to_string(),
         }
     }
 }

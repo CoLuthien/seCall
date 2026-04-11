@@ -93,20 +93,16 @@ pub async fn run(local_only: bool, dry_run: bool, no_wiki: bool) -> Result<()> {
 
         // === Phase 3.5: Incremental wiki (새 세션 → wiki 갱신) ===
         if !no_wiki && !ingest_result.new_session_ids.is_empty() {
-            if !secall_core::command_exists("claude") {
-                eprintln!("  ⚠ Claude CLI not found, skipping wiki update.");
-            } else {
-                let count = ingest_result.new_session_ids.len();
-                if count > 10 {
-                    eprintln!("  ⚠ {} new sessions — consider running `secall wiki update` in batch mode for efficiency.", count);
-                }
-                eprintln!("Updating wiki for {} new session(s)...", count);
-                for sid in &ingest_result.new_session_ids {
-                    match wiki::run_update("sonnet", None, Some(sid.as_str()), false).await {
-                        Ok(()) => eprintln!("  ✓ wiki updated for {}", &sid[..sid.len().min(8)]),
-                        Err(e) => {
-                            eprintln!("  ⚠ wiki failed for {}: {e}", &sid[..sid.len().min(8)])
-                        }
+            let count = ingest_result.new_session_ids.len();
+            if count > 10 {
+                eprintln!("  ⚠ {} new sessions — consider running `secall wiki update` in batch mode for efficiency.", count);
+            }
+            eprintln!("Updating wiki for {} new session(s)...", count);
+            for sid in &ingest_result.new_session_ids {
+                match wiki::run_update("sonnet", None, None, Some(sid.as_str()), false).await {
+                    Ok(()) => eprintln!("  ✓ wiki updated for {}", &sid[..sid.len().min(8)]),
+                    Err(e) => {
+                        eprintln!("  ⚠ wiki failed for {}: {e}", &sid[..sid.len().min(8)])
                     }
                 }
             }
