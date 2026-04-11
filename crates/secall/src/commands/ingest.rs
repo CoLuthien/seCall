@@ -274,9 +274,12 @@ pub async fn ingest_sessions(
 
     // 벡터 인덱싱 일괄 처리 (BM25/vault와 분리하여 체감 속도 개선)
     if !vector_tasks.is_empty() {
-        eprintln!("Embedding {} session(s)...", vector_tasks.len());
+        let total = vector_tasks.len();
+        eprintln!("Embedding {total} session(s)...");
         let tz = config.timezone();
-        for session in &vector_tasks {
+        for (i, session) in vector_tasks.iter().enumerate() {
+            let short = &session.id[..8.min(session.id.len())];
+            eprintln!("  [{}/{total}] {short} ({} turns)", i + 1, session.turns.len());
             if let Err(e) = engine.index_session_vectors(db, session, tz).await {
                 tracing::warn!(session = &session.id[..8.min(session.id.len())], error = %e, "vector embedding failed");
                 error_details.push(IngestError {
