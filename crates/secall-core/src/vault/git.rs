@@ -112,12 +112,7 @@ impl<'a> VaultGit<'a> {
         let new_files = if !already_up_to_date {
             self.run_git(&["diff", "--stat", "HEAD@{1}", "HEAD"])
                 .ok()
-                .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .filter(|l| l.contains("raw/sessions/"))
-                        .count()
-                })
+                .map(|o| count_new_session_files(&String::from_utf8_lossy(&o.stdout)))
                 .unwrap_or(0)
         } else {
             0
@@ -204,4 +199,49 @@ pub struct PullResult {
 
 pub struct PushResult {
     pub committed: usize,
+}
+
+/// git diff --stat 출력에서 raw/sessions/ 경로가 포함된 라인 수를 카운트.
+pub(crate) fn count_new_session_files(diff_stat_output: &str) -> usize {
+    diff_stat_output
+        .lines()
+        .filter(|l| l.contains("raw/sessions/"))
+        .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_count_single_session() {
+        let output = " raw/sessions/2026-04-01/abc.md | 45 ++++\n 1 file changed";
+        assert_eq!(count_new_session_files(output), 1);
+    }
+
+    #[test]
+    fn test_count_multiple_mixed() {
+        let output = " raw/sessions/2026-04-01/abc.md | 45 ++++\n \
+                       raw/sessions/2026-04-01/def.md | 12 ++\n \
+                       wiki/projects/foo.md           |  8 +\n \
+                       3 files changed, 65 insertions(+)";
+        assert_eq!(count_new_session_files(output), 2);
+    }
+
+    #[test]
+    fn test_count_no_sessions() {
+        let output = " wiki/topics/rust.md | 20 ++\n index.md | 3 +\n 2 files changed";
+        assert_eq!(count_new_session_files(output), 0);
+    }
+
+    #[test]
+    fn test_count_empty() {
+        assert_eq!(count_new_session_files(""), 0);
+    }
+
+    #[test]
+    fn test_count_summary_not_counted() {
+        let output = " raw/sessions/x.md | 1 +\n 1 file changed, 1 insertion(+)";
+        assert_eq!(count_new_session_files(output), 1);
+    }
 }

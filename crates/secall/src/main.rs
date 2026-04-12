@@ -133,6 +133,10 @@ enum Commands {
         /// Only show errors (skip warn/info)
         #[arg(long)]
         errors_only: bool,
+
+        /// Auto-fix: delete stale DB records for missing vault files (L001)
+        #[arg(long)]
+        fix: bool,
     },
 
     /// Start MCP server
@@ -350,8 +354,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Classify { dry_run } => {
             commands::classify::run_backfill(dry_run).await?;
         }
-        Commands::Lint { json, errors_only } => {
-            commands::lint::run(json, errors_only)?;
+        Commands::Lint {
+            json,
+            errors_only,
+            fix,
+        } => {
+            commands::lint::run(json, errors_only, fix)?;
         }
         Commands::Mcp { http } => {
             commands::mcp::run(http).await?;

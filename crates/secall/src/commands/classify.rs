@@ -33,16 +33,11 @@ pub async fn run_backfill(dry_run: bool) -> Result<()> {
         .collect::<anyhow::Result<_>>()?;
 
     for (session_id, _cwd, _project, _agent, first_content) in &sessions {
-        // 첫 번째 user turn 내용으로 규칙 매칭
-        let matched_type = compiled_rules.iter().find_map(|(re, session_type)| {
-            if re.is_match(first_content) {
-                Some(session_type.clone())
-            } else {
-                None
-            }
-        });
-
-        let new_type = matched_type.unwrap_or_else(|| classification.default.clone());
+        let new_type = super::ingest::apply_classification(
+            &compiled_rules,
+            first_content,
+            &classification.default,
+        );
 
         let short_id = &session_id[..8.min(session_id.len())];
         if dry_run {

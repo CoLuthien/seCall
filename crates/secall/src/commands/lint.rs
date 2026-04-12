@@ -5,7 +5,7 @@ use secall_core::{
     vault::Config,
 };
 
-pub fn run(json: bool, errors_only: bool) -> Result<()> {
+pub fn run(json: bool, errors_only: bool, fix: bool) -> Result<()> {
     let config = Config::load_or_default();
     let db_path = get_default_db_path();
     let db = Database::open(&db_path)?;
@@ -14,6 +14,9 @@ pub fn run(json: bool, errors_only: bool) -> Result<()> {
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
+        if fix {
+            run_fix(&db, &report)?;
+        }
         return Ok(());
     }
 
@@ -58,10 +61,57 @@ pub fn run(json: bool, errors_only: bool) -> Result<()> {
         println!("Agents: {}", agent_str.join(", "));
     }
 
-    // Exit with code 1 if there are errors
-    if report.summary.errors > 0 {
+    // --fix: auto-repair L001 (stale DB records)
+    if fix {
+        run_fix(&db, &report)?;
+    }
+
+    // Exit with code 1 if there are errors (after fix, re-count)
+    let remaining_errors = if fix {
+        // Re-run lint to get updated count
+        let updated = run_lint(&db, &config)?;
+        updated.summary.errors
+    } else {
+        report.summary.errors
+    };
+
+    if remaining_errors > 0 {
         std::process::exit(1);
     }
 
+    Ok(())
+}
+
+fn run_fix(
+    db: &Database,
+    report: &secall_core::ingest::lint::LintReport,
+) -> Result<()> {
+    let stale: Vec<&str> = report
+        .findings
+        .iter()
+        .filter(|f| f.code == "L001" && f.session_id.is_some())
+        .filter(|f| f.message.contains("vault file missing"))
+        .filter_map(|f| f.session_id.as_deref())
+        .collect();
+
+    if stale.is_empty() {
+        eprintln!("[fix] No stale DB records to clean up.");
+        return Ok(());
+    }
+
+    eprintln!(
+        "[fix] Removing {} stale DB record(s) with missing vault files...",
+        stale.len()
+    );
+    for session_id in &stale {
+        match db.delete_session(session_id) {
+            Ok(()) => eprintln!("  deleted {}", &session_id[..session_id.len().min(8)]),
+            Err(e) => eprintln!(
+                "  failed to delete {}: {e}",
+                &session_id[..session_id.len().min(8)]
+            ),
+        }
+    }
+    eprintln!("[fix] Done. {} record(s) removed.", stale.len());
     Ok(())
 }

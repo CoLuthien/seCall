@@ -322,6 +322,27 @@ pub async fn ingest_sessions(
     })
 }
 
+/// 컴파일된 regex 규칙과 첫 번째 user turn 내용으로 session_type 결정.
+pub(crate) fn apply_classification(
+    compiled_rules: &[(regex::Regex, String)],
+    first_user_content: &str,
+    default_type: &str,
+) -> String {
+    if compiled_rules.is_empty() {
+        return default_type.to_string();
+    }
+    compiled_rules
+        .iter()
+        .find_map(|(re, session_type)| {
+            if re.is_match(first_user_content) {
+                Some(session_type.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| default_type.to_string())
+}
+
 /// 단일 Session을 vault + BM25 + 벡터 목록에 ingest
 #[allow(clippy::too_many_arguments)]
 fn ingest_single_session(
@@ -350,25 +371,17 @@ fn ingest_single_session(
 
     // 세션 분류: 첫 번째 user turn의 내용을 규칙과 매칭
     {
-        let classification = &config.ingest.classification;
-        if !compiled_rules.is_empty() {
-            let first_user_content = session
-                .turns
-                .iter()
-                .find(|t| t.role == secall_core::ingest::Role::User)
-                .map(|t| t.content.as_str())
-                .unwrap_or("");
-
-            let matched_type = compiled_rules.iter().find_map(|(re, session_type)| {
-                if re.is_match(first_user_content) {
-                    Some(session_type.clone())
-                } else {
-                    None
-                }
-            });
-
-            session.session_type = matched_type.unwrap_or_else(|| classification.default.clone());
-        }
+        let first_user_content = session
+            .turns
+            .iter()
+            .find(|t| t.role == secall_core::ingest::Role::User)
+            .map(|t| t.content.as_str())
+            .unwrap_or("");
+        session.session_type = apply_classification(
+            compiled_rules,
+            first_user_content,
+            &config.ingest.classification.default,
+        );
     }
 
     // 실제 session.id 기준 중복 체크 (--force 시 기존 데이터 삭제 후 재삽입)
@@ -532,4 +545,67 @@ fn find_session_by_id(id: &str) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use regex::Regex;
+
+    fn rules(patterns: &[(&str, &str)]) -> Vec<(Regex, String)> {
+        patterns
+            .iter()
+            .map(|(p, t)| (Regex::new(p).unwrap(), t.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn test_matches_first_rule() {
+        let r = rules(&[("^\\[자동화\\]", "automated")]);
+        assert_eq!(
+            apply_classification(&r, "[자동화] 월간 보고", "interactive"),
+            "automated"
+        );
+    }
+
+    #[test]
+    fn test_matches_second_rule() {
+        let r = rules(&[("^\\[자동화\\]", "automated"), ("^# Wiki", "automated")]);
+        assert_eq!(
+            apply_classification(&r, "# Wiki Update", "interactive"),
+            "automated"
+        );
+    }
+
+    #[test]
+    fn test_no_match_uses_default() {
+        let r = rules(&[("^\\[자동화\\]", "automated")]);
+        assert_eq!(
+            apply_classification(&r, "일반 질문입니다", "interactive"),
+            "interactive"
+        );
+    }
+
+    #[test]
+    fn test_empty_rules_returns_default() {
+        assert_eq!(
+            apply_classification(&[], "아무 내용", "interactive"),
+            "interactive"
+        );
+    }
+
+    #[test]
+    fn test_empty_content() {
+        let r = rules(&[("^\\[자동화\\]", "automated")]);
+        assert_eq!(apply_classification(&r, "", "interactive"), "interactive");
+    }
+
+    #[test]
+    fn test_first_match_wins() {
+        let r = rules(&[("test", "type-a"), ("test", "type-b")]);
+        assert_eq!(
+            apply_classification(&r, "test content", "default"),
+            "type-a"
+        );
+    }
 }

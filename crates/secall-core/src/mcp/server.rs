@@ -291,6 +291,8 @@ impl SeCallMcpServer {
             title: String,
             preview: String,
             name_match: bool,
+            created: Option<String>,
+            updated: Option<String>,
         }
 
         let mut matches: Vec<Match> = walkdir::WalkDir::new(&search_root)
@@ -334,11 +336,16 @@ impl SeCallMcpServer {
 
                 let preview: String = content.chars().take(500).collect();
 
+                // frontmatter에서 created/updated 추출
+                let (created, updated) = extract_wiki_dates(&content);
+
                 Some(Match {
                     path: rel,
                     title,
                     preview,
                     name_match,
+                    created,
+                    updated,
                 })
             })
             .collect();
@@ -350,11 +357,18 @@ impl SeCallMcpServer {
         let results: Vec<serde_json::Value> = matches
             .into_iter()
             .map(|m| {
-                serde_json::json!({
+                let mut obj = serde_json::json!({
                     "path": m.path,
                     "title": m.title,
                     "preview": m.preview,
-                })
+                });
+                if let Some(created) = m.created {
+                    obj["created"] = serde_json::Value::String(created);
+                }
+                if let Some(updated) = m.updated {
+                    obj["updated"] = serde_json::Value::String(updated);
+                }
+                obj
             })
             .collect();
 
@@ -522,6 +536,29 @@ pub async fn start_mcp_http_server(
     Ok(())
 }
 
+/// wiki md frontmatter에서 created/updated 값을 추출.
+fn extract_wiki_dates(content: &str) -> (Option<String>, Option<String>) {
+    let fm = match content.strip_prefix("---\n") {
+        Some(rest) => match rest.split_once("\n---") {
+            Some((fm, _)) => fm,
+            None => return (None, None),
+        },
+        None => return (None, None),
+    };
+
+    let mut created = None;
+    let mut updated = None;
+    for line in fm.lines() {
+        let trimmed = line.trim();
+        if let Some(val) = trimmed.strip_prefix("created:") {
+            created = Some(val.trim().trim_matches('"').to_string());
+        } else if let Some(val) = trimmed.strip_prefix("updated:") {
+            updated = Some(val.trim().trim_matches('"').to_string());
+        }
+    }
+    (created, updated)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -569,5 +606,36 @@ mod tests {
         };
         let result = server.recall(Parameters(params)).await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_extract_wiki_dates_both() {
+        let content = "---\ntitle: Test\ncreated: 2026-04-10\nupdated: 2026-04-12\n---\n# Test";
+        let (created, updated) = super::extract_wiki_dates(content);
+        assert_eq!(created.as_deref(), Some("2026-04-10"));
+        assert_eq!(updated.as_deref(), Some("2026-04-12"));
+    }
+
+    #[test]
+    fn test_extract_wiki_dates_none() {
+        let content = "---\ntitle: Test\n---\n# Test";
+        let (created, updated) = super::extract_wiki_dates(content);
+        assert!(created.is_none());
+        assert!(updated.is_none());
+    }
+
+    #[test]
+    fn test_extract_wiki_dates_no_frontmatter() {
+        let content = "# Just a heading\nSome text";
+        let (created, updated) = super::extract_wiki_dates(content);
+        assert!(created.is_none());
+        assert!(updated.is_none());
+    }
+
+    #[test]
+    fn test_extract_wiki_dates_quoted() {
+        let content = "---\ncreated: \"2026-04-10\"\n---\n";
+        let (created, _) = super::extract_wiki_dates(content);
+        assert_eq!(created.as_deref(), Some("2026-04-10"));
     }
 }
