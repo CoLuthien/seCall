@@ -11,6 +11,12 @@ pub mod wiki;
 
 pub use error::{Result, SecallError};
 
+/// 간단한 HTTP POST JSON 헬퍼 (Ollama 모델 언로드 등 내부용)
+pub async fn http_post_json(url: &str, body: &serde_json::Value) -> anyhow::Result<()> {
+    reqwest::Client::new().post(url).json(body).send().await?;
+    Ok(())
+}
+
 /// 크로스플랫폼 명령어 존재 확인
 pub fn command_exists(cmd: &str) -> bool {
     #[cfg(target_os = "windows")]

@@ -14,6 +14,7 @@ pub struct Config {
     pub openvino: OpenVinoConfig,
     pub output: OutputConfig,
     pub wiki: WikiConfig,
+    pub graph: GraphConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -143,11 +144,43 @@ impl Default for WikiConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct GraphConfig {
+    /// 시맨틱 엣지 추출 활성화 (기본: true)
+    pub semantic: bool,
+    /// LLM backend: "ollama" (기본) | "anthropic" | "disabled" (규칙 기반만)
+    pub semantic_backend: String,
+    /// Ollama base URL (ollama backend)
+    pub ollama_url: Option<String>,
+    /// Ollama model name (ollama backend, 기본: gemma4:e4b)
+    pub ollama_model: Option<String>,
+    /// Anthropic model name (anthropic backend, 기본: claude-haiku-4-5-20251001)
+    pub anthropic_model: Option<String>,
+}
+
+impl Default for GraphConfig {
+    fn default() -> Self {
+        GraphConfig {
+            semantic: true,
+            semantic_backend: "ollama".to_string(),
+            ollama_url: None,
+            ollama_model: None,
+            anthropic_model: None,
+        }
+    }
+}
+
 /// 단일 세션 분류 규칙
+/// pattern 또는 project 중 하나 이상 지정해야 함.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClassificationRule {
-    /// 첫 번째 user turn 내용에 매칭할 regex 패턴
-    pub pattern: String,
+    /// 첫 번째 user turn 내용에 매칭할 regex 패턴 (선택)
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// 세션의 project 필드와 정확히 일치할 프로젝트명 (선택)
+    #[serde(default)]
+    pub project: Option<String>,
     /// 매칭 시 부여할 session_type (예: "automated", "health_check")
     pub session_type: String,
 }
@@ -198,6 +231,7 @@ impl Default for Config {
             openvino: OpenVinoConfig::default(),
             output: OutputConfig::default(),
             wiki: WikiConfig::default(),
+            graph: GraphConfig::default(),
         }
     }
 }

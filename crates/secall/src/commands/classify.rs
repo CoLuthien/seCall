@@ -22,20 +22,32 @@ pub async fn run_backfill(dry_run: bool) -> Result<()> {
     let total = sessions.len();
     let mut updated = 0usize;
 
-    let compiled_rules: Vec<(regex::Regex, String)> = classification
+    let compiled_rules: Vec<super::ingest::CompiledRule> = classification
         .rules
         .iter()
         .map(|rule| {
-            regex::Regex::new(&rule.pattern)
-                .map(|re| (re, rule.session_type.clone()))
-                .map_err(|e| anyhow::anyhow!("invalid regex pattern {:?}: {}", rule.pattern, e))
+            if let Some(pattern) = &rule.pattern {
+                regex::Regex::new(pattern)
+                    .map(|re| super::ingest::CompiledRule::Pattern(re, rule.session_type.clone()))
+                    .map_err(|e| anyhow::anyhow!("invalid regex pattern {:?}: {}", pattern, e))
+            } else if let Some(project) = &rule.project {
+                Ok(super::ingest::CompiledRule::Project(
+                    project.clone(),
+                    rule.session_type.clone(),
+                ))
+            } else {
+                Err(anyhow::anyhow!(
+                    "classification rule missing both 'pattern' and 'project' fields"
+                ))
+            }
         })
         .collect::<anyhow::Result<_>>()?;
 
-    for (session_id, _cwd, _project, _agent, first_content) in &sessions {
+    for (session_id, _cwd, project, _agent, first_content) in &sessions {
         let new_type = super::ingest::apply_classification(
             &compiled_rules,
             first_content,
+            project.as_deref(),
             &classification.default,
         );
 

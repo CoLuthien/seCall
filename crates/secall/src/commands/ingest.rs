@@ -41,6 +41,7 @@ pub struct IngestStats {
     pub skipped: usize,
     pub errors: usize,
     pub skipped_min_turns: usize,
+    pub hook_failures: usize,
     pub new_session_ids: Vec<String>,
     pub error_details: Vec<IngestError>,
 }
@@ -51,6 +52,7 @@ pub async fn run(
     cwd: Option<PathBuf>,
     min_turns: usize,
     force: bool,
+    no_semantic: bool,
     format: &OutputFormat,
 ) -> Result<()> {
     let config = Config::load_or_default();
@@ -74,7 +76,15 @@ pub async fn run(
     }
 
     let stats = ingest_sessions(
-        &config, &db, paths, &engine, &vault, min_turns, force, format,
+        &config,
+        &db,
+        paths,
+        &engine,
+        &vault,
+        min_turns,
+        force,
+        no_semantic,
+        format,
     )
     .await?;
 
@@ -94,6 +104,9 @@ pub async fn run(
                         "         {} skipped (too few turns)",
                         stats.skipped_min_turns
                     );
+                }
+                if stats.hook_failures > 0 {
+                    eprintln!("         {} hook failure(s)", stats.hook_failures);
                 }
                 if !stats.error_details.is_empty() {
                     eprintln!("\nErrors:");
@@ -139,27 +152,38 @@ pub async fn ingest_sessions(
     vault: &Vault,
     min_turns: usize,
     force: bool,
+    no_semantic: bool,
     format: &OutputFormat,
 ) -> Result<IngestStats> {
     let mut ingested = 0usize;
     let mut skipped = 0usize;
     let mut errors = 0usize;
     let mut skipped_min_turns = 0usize;
+    let mut hook_failures = 0usize;
     let mut new_session_ids: Vec<String> = Vec::new();
     let mut error_details: Vec<IngestError> = Vec::new();
 
     // BM25/vault 완료 후 벡터 임베딩을 일괄 처리하기 위한 수집 목록.
     let mut vector_tasks: Vec<secall_core::ingest::Session> = Vec::new();
 
-    let compiled_rules: Vec<(regex::Regex, String)> = {
+    let compiled_rules: Vec<CompiledRule> = {
         let classification = &config.ingest.classification;
         classification
             .rules
             .iter()
             .map(|rule| {
-                regex::Regex::new(&rule.pattern)
-                    .map(|re| (re, rule.session_type.clone()))
-                    .map_err(|e| anyhow::anyhow!("invalid regex pattern {:?}: {}", rule.pattern, e))
+                if let Some(pattern) = &rule.pattern {
+                    regex::Regex::new(pattern)
+                        .map(|re| CompiledRule::Pattern(re, rule.session_type.clone()))
+                        .map_err(|e| anyhow::anyhow!("invalid regex pattern {:?}: {}", pattern, e))
+                } else if let Some(project) = &rule.project {
+                    Ok(CompiledRule::Project(project.clone(), rule.session_type.clone()))
+                } else {
+                    Err(anyhow::anyhow!(
+                        "classification rule missing both 'pattern' and 'project' fields (session_type: {:?})",
+                        rule.session_type
+                    ))
+                }
             })
             .collect::<anyhow::Result<_>>()?
     };
@@ -209,6 +233,7 @@ pub async fn ingest_sessions(
                             &mut new_session_ids,
                             &mut vector_tasks,
                             &mut error_details,
+                            &mut hook_failures,
                         );
                     }
                 }
@@ -235,8 +260,31 @@ pub async fn ingest_sessions(
 
             match db.session_exists(session_id_hint) {
                 Ok(true) => {
-                    skipped += 1;
-                    continue;
+                    // 오픈 세션(end_time IS NULL)이면 파일이 변경됐을 수 있으므로 재인제스트
+                    match db.is_session_open(session_id_hint) {
+                        Ok(true) => {
+                            // 기존 레코드 삭제 후 재인제스트
+                            if let Err(e) = db.delete_session(session_id_hint) {
+                                tracing::warn!(
+                                    session = session_id_hint,
+                                    "failed to delete open session: {}",
+                                    e
+                                );
+                                skipped += 1;
+                                continue;
+                            }
+                            tracing::debug!(session = session_id_hint, "re-ingesting open session");
+                        }
+                        Ok(false) => {
+                            skipped += 1;
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::warn!(session = session_id_hint, "open check failed: {}", e);
+                            skipped += 1;
+                            continue;
+                        }
+                    }
                 }
                 Ok(false) => {}
                 Err(e) => {
@@ -272,6 +320,7 @@ pub async fn ingest_sessions(
                     &mut new_session_ids,
                     &mut vector_tasks,
                     &mut error_details,
+                    &mut hook_failures,
                 );
             }
             Err(e) => {
@@ -312,20 +361,103 @@ pub async fn ingest_sessions(
         }
     }
 
+    // 시맨틱 엣지 추출 (graph build 경유 아닌 ingest 직접 연동)
+    if config.graph.semantic && !no_semantic && !new_session_ids.is_empty() {
+        // 임베딩 모델(bge-m3)이 Ollama에 로드되어 있으면 언로드하여
+        // gemma4와 동시 로드로 인한 메모리 압박 방지 (16GB 시스템 대응)
+        if config.embedding.backend == "ollama" && config.graph.semantic_backend == "ollama" {
+            let embed_model = config.embedding.ollama_model.as_deref().unwrap_or("bge-m3");
+            let ollama_url = config
+                .embedding
+                .ollama_url
+                .as_deref()
+                .unwrap_or("http://localhost:11434");
+            let unload_url = format!("{}/api/generate", ollama_url.trim_end_matches('/'));
+            let body = serde_json::json!({"model": embed_model, "keep_alive": 0});
+            match secall_core::http_post_json(&unload_url, &body).await {
+                Ok(_) => tracing::debug!(
+                    model = embed_model,
+                    "unloaded embedding model before semantic extraction"
+                ),
+                Err(e) => {
+                    tracing::debug!(model = embed_model, "embedding model unload skipped: {}", e)
+                }
+            }
+        }
+        eprintln!(
+            "Extracting semantic edges for {} session(s)...",
+            new_session_ids.len()
+        );
+        for session_id in &new_session_ids {
+            let short = &session_id[..8.min(session_id.len())];
+            // vault에서 세션 마크다운 읽기
+            let vault_path_opt = match db.get_session_vault_path(session_id) {
+                Ok(vp) => vp,
+                Err(e) => {
+                    tracing::warn!(session = short, "DB error reading vault path: {}", e);
+                    continue;
+                }
+            };
+            let md_path = match vault_path_opt {
+                Some(vp) => config.vault.path.join(&vp),
+                None => {
+                    tracing::debug!(
+                        session = short,
+                        "no vault path, skipping semantic extraction"
+                    );
+                    continue;
+                }
+            };
+            let content = match std::fs::read_to_string(&md_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(session = short, "failed to read vault file: {}", e);
+                    continue;
+                }
+            };
+            let fm = match secall_core::ingest::markdown::parse_session_frontmatter(&content) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!(session = short, "failed to parse frontmatter: {}", e);
+                    continue;
+                }
+            };
+            let body = secall_core::ingest::markdown::extract_body_text(&content);
+            match secall_core::graph::semantic::extract_and_store(db, &config.graph, &fm, &body)
+                .await
+            {
+                Ok(n) => {
+                    tracing::debug!(session = short, edges = n, "semantic edges extracted")
+                }
+                Err(e) => {
+                    tracing::warn!(session = short, "semantic extraction skipped: {}", e)
+                }
+            }
+        }
+    }
+
     Ok(IngestStats {
         ingested,
         skipped,
         errors,
         skipped_min_turns,
+        hook_failures,
         new_session_ids,
         error_details,
     })
 }
 
-/// 컴파일된 regex 규칙과 첫 번째 user turn 내용으로 session_type 결정.
+/// 분류 규칙 — regex 패턴 또는 project 이름 매칭
+pub(crate) enum CompiledRule {
+    Pattern(regex::Regex, String),
+    Project(String, String),
+}
+
+/// 컴파일된 규칙, 첫 번째 user turn 내용, 세션 project로 session_type 결정.
 pub(crate) fn apply_classification(
-    compiled_rules: &[(regex::Regex, String)],
+    compiled_rules: &[CompiledRule],
     first_user_content: &str,
+    project: Option<&str>,
     default_type: &str,
 ) -> String {
     if compiled_rules.is_empty() {
@@ -333,11 +465,20 @@ pub(crate) fn apply_classification(
     }
     compiled_rules
         .iter()
-        .find_map(|(re, session_type)| {
-            if re.is_match(first_user_content) {
-                Some(session_type.clone())
-            } else {
-                None
+        .find_map(|rule| match rule {
+            CompiledRule::Pattern(re, session_type) => {
+                if re.is_match(first_user_content) {
+                    Some(session_type.clone())
+                } else {
+                    None
+                }
+            }
+            CompiledRule::Project(proj, session_type) => {
+                if project.map(|p| p == proj).unwrap_or(false) {
+                    Some(session_type.clone())
+                } else {
+                    None
+                }
             }
         })
         .unwrap_or_else(|| default_type.to_string())
@@ -347,7 +488,7 @@ pub(crate) fn apply_classification(
 #[allow(clippy::too_many_arguments)]
 fn ingest_single_session(
     config: &Config,
-    compiled_rules: &[(regex::Regex, String)],
+    compiled_rules: &[CompiledRule],
     db: &Database,
     engine: &SearchEngine,
     vault: &Vault,
@@ -362,6 +503,7 @@ fn ingest_single_session(
     new_session_ids: &mut Vec<String>,
     vector_tasks: &mut Vec<secall_core::ingest::Session>,
     error_details: &mut Vec<IngestError>,
+    hook_failures: &mut usize,
 ) {
     // 턴 수 필터 — min_turns > 0 이면 짧은 세션 skip
     if min_turns > 0 && session.turns.len() < min_turns {
@@ -369,7 +511,7 @@ fn ingest_single_session(
         return;
     }
 
-    // 세션 분류: 첫 번째 user turn의 내용을 규칙과 매칭
+    // 세션 분류: 첫 번째 user turn의 내용 또는 project 이름을 규칙과 매칭
     {
         let first_user_content = session
             .turns
@@ -380,6 +522,7 @@ fn ingest_single_session(
         session.session_type = apply_classification(
             compiled_rules,
             first_user_content,
+            session.project.as_deref(),
             &config.ingest.classification.default,
         );
     }
@@ -473,6 +616,7 @@ fn ingest_single_session(
 
     if let Err(e) = run_post_ingest_hook(config, &session, &abs_path, tz) {
         tracing::warn!(session = &session.id[..8.min(session.id.len())], error = %e, "post-ingest hook failed");
+        *hook_failures += 1;
     }
 
     // 3. 벡터 임베딩을 위해 수집 (skip_embed_types에 포함된 session_type은 제외)
@@ -552,36 +696,43 @@ mod tests {
     use super::*;
     use regex::Regex;
 
-    fn rules(patterns: &[(&str, &str)]) -> Vec<(Regex, String)> {
+    fn pattern_rules(patterns: &[(&str, &str)]) -> Vec<CompiledRule> {
         patterns
             .iter()
-            .map(|(p, t)| (Regex::new(p).unwrap(), t.to_string()))
+            .map(|(p, t)| CompiledRule::Pattern(Regex::new(p).unwrap(), t.to_string()))
+            .collect()
+    }
+
+    fn project_rules(projects: &[(&str, &str)]) -> Vec<CompiledRule> {
+        projects
+            .iter()
+            .map(|(p, t)| CompiledRule::Project(p.to_string(), t.to_string()))
             .collect()
     }
 
     #[test]
     fn test_matches_first_rule() {
-        let r = rules(&[("^\\[자동화\\]", "automated")]);
+        let r = pattern_rules(&[("^\\[자동화\\]", "automated")]);
         assert_eq!(
-            apply_classification(&r, "[자동화] 월간 보고", "interactive"),
+            apply_classification(&r, "[자동화] 월간 보고", None, "interactive"),
             "automated"
         );
     }
 
     #[test]
     fn test_matches_second_rule() {
-        let r = rules(&[("^\\[자동화\\]", "automated"), ("^# Wiki", "automated")]);
+        let r = pattern_rules(&[("^\\[자동화\\]", "automated"), ("^# Wiki", "automated")]);
         assert_eq!(
-            apply_classification(&r, "# Wiki Update", "interactive"),
+            apply_classification(&r, "# Wiki Update", None, "interactive"),
             "automated"
         );
     }
 
     #[test]
     fn test_no_match_uses_default() {
-        let r = rules(&[("^\\[자동화\\]", "automated")]);
+        let r = pattern_rules(&[("^\\[자동화\\]", "automated")]);
         assert_eq!(
-            apply_classification(&r, "일반 질문입니다", "interactive"),
+            apply_classification(&r, "일반 질문입니다", None, "interactive"),
             "interactive"
         );
     }
@@ -589,23 +740,69 @@ mod tests {
     #[test]
     fn test_empty_rules_returns_default() {
         assert_eq!(
-            apply_classification(&[], "아무 내용", "interactive"),
+            apply_classification(&[], "아무 내용", None, "interactive"),
             "interactive"
         );
     }
 
     #[test]
     fn test_empty_content() {
-        let r = rules(&[("^\\[자동화\\]", "automated")]);
-        assert_eq!(apply_classification(&r, "", "interactive"), "interactive");
+        let r = pattern_rules(&[("^\\[자동화\\]", "automated")]);
+        assert_eq!(
+            apply_classification(&r, "", None, "interactive"),
+            "interactive"
+        );
     }
 
     #[test]
     fn test_first_match_wins() {
-        let r = rules(&[("test", "type-a"), ("test", "type-b")]);
+        let r = pattern_rules(&[("test", "type-a"), ("test", "type-b")]);
         assert_eq!(
-            apply_classification(&r, "test content", "default"),
+            apply_classification(&r, "test content", None, "default"),
             "type-a"
+        );
+    }
+
+    #[test]
+    fn test_project_rule_matches() {
+        let r = project_rules(&[("macbook", "automated")]);
+        assert_eq!(
+            apply_classification(&r, "아무 내용", Some("macbook"), "interactive"),
+            "automated"
+        );
+    }
+
+    #[test]
+    fn test_project_rule_no_match() {
+        let r = project_rules(&[("macbook", "automated")]);
+        assert_eq!(
+            apply_classification(&r, "아무 내용", Some("otherproject"), "interactive"),
+            "interactive"
+        );
+    }
+
+    #[test]
+    fn test_project_rule_no_project_field() {
+        let r = project_rules(&[("macbook", "automated")]);
+        assert_eq!(
+            apply_classification(&r, "아무 내용", None, "interactive"),
+            "interactive"
+        );
+    }
+
+    #[test]
+    fn test_mixed_rules_project_wins_first() {
+        let r = vec![
+            CompiledRule::Project("macbook".to_string(), "automated".to_string()),
+            CompiledRule::Pattern(
+                Regex::new("^\\[자동화\\]").unwrap(),
+                "automated".to_string(),
+            ),
+        ];
+        // project 규칙이 앞에 있으므로 macbook 프로젝트는 project 규칙으로 먼저 매칭
+        assert_eq!(
+            apply_classification(&r, "일반 내용", Some("macbook"), "interactive"),
+            "automated"
         );
     }
 }

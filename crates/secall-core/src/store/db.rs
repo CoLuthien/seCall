@@ -243,6 +243,18 @@ impl Database {
 
     // ─── Lint helpers ────────────────────────────────────────────────────────
 
+    /// Return vault_path for a single session
+    pub fn get_session_vault_path(&self, session_id: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT vault_path FROM sessions WHERE id = ?1")?;
+        match stmt.query_row([session_id], |row| row.get::<_, Option<String>>(0)) {
+            Ok(vp) => Ok(vp),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Return (session_id, vault_path) for all sessions
     pub fn list_session_vault_paths(&self) -> Result<Vec<(String, Option<String>)>> {
         let mut stmt = self.conn.prepare("SELECT id, vault_path FROM sessions")?;
@@ -641,6 +653,75 @@ impl Database {
         Ok(rows)
     }
 
+    /// 특정 날짜의 세션 목록 조회 (일기 생성용)
+    /// Returns: (id, project, summary, turn_count, tools_used, session_type)
+    pub fn get_sessions_for_date(
+        &self,
+        date: &str, // "YYYY-MM-DD"
+    ) -> Result<
+        Vec<(
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+            Option<String>,
+            String,
+        )>,
+    > {
+        let pattern = format!("{}%", date);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project, summary, turn_count, tools_used, session_type
+             FROM sessions
+             WHERE start_time LIKE ?1
+             ORDER BY start_time",
+        )?;
+        let rows = stmt
+            .query_map([pattern], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)
+                        .unwrap_or_else(|_| "interactive".to_string()),
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// 세션들의 discusses_topic 엣지 조회 (일기 주제 파악용)
+    pub fn get_topics_for_sessions(&self, session_ids: &[String]) -> Result<Vec<(String, String)>> {
+        if session_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders: String = session_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sources: Vec<String> = session_ids
+            .iter()
+            .map(|id| format!("session:{}", id))
+            .collect();
+        let sql = format!(
+            "SELECT source, target FROM graph_edges
+             WHERE relation = 'discusses_topic' AND source IN ({})",
+            placeholders
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(sources.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// 세션의 session_type 업데이트
     pub fn update_session_type(&self, session_id: &str, session_type: &str) -> Result<()> {
         self.conn.execute(
@@ -705,7 +786,7 @@ pub struct TurnRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ingest::{AgentKind, Session, TokenUsage, Turn};
+    use crate::ingest::{AgentKind, Role, Session, TokenUsage, Turn};
     use crate::store::SessionRepo;
     use chrono::TimeZone;
 
@@ -889,5 +970,101 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fts_count, 1);
+    }
+
+    // ─── get_sessions_for_date / get_topics_for_sessions ────────────────
+
+    #[test]
+    fn test_get_sessions_for_date_filters_by_date() {
+        let db = Database::open_memory().unwrap();
+
+        let mut s1 = make_test_session("date-001");
+        s1.start_time = chrono::Utc.with_ymd_and_hms(2026, 4, 10, 9, 0, 0).unwrap();
+        s1.turns = vec![Turn {
+            index: 0,
+            role: Role::User,
+            timestamp: None,
+            content: "hello".to_string(),
+            actions: vec![],
+            tokens: None,
+            thinking: None,
+            is_sidechain: false,
+        }];
+        db.insert_session(&s1).unwrap();
+
+        let mut s2 = make_test_session("date-002");
+        s2.start_time = chrono::Utc.with_ymd_and_hms(2026, 4, 11, 10, 0, 0).unwrap();
+        s2.turns = vec![Turn {
+            index: 0,
+            role: Role::User,
+            timestamp: None,
+            content: "world".to_string(),
+            actions: vec![],
+            tokens: None,
+            thinking: None,
+            is_sidechain: false,
+        }];
+        db.insert_session(&s2).unwrap();
+
+        let rows = db.get_sessions_for_date("2026-04-10").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "date-001");
+
+        let empty = db.get_sessions_for_date("2026-04-12").unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_get_topics_for_sessions_empty_input() {
+        let db = Database::open_memory().unwrap();
+        let result = db.get_topics_for_sessions(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_topics_for_sessions_with_edges() {
+        let db = Database::open_memory().unwrap();
+
+        // graph_nodes에 먼저 노드 삽입 (FK 제약)
+        for (id, ntype, label) in [
+            ("session:topic-001", "session", "topic-001"),
+            ("topic:rust", "topic", "rust"),
+            ("topic:async", "topic", "async"),
+            ("file:main.rs", "file", "main.rs"),
+        ] {
+            db.conn()
+                .execute(
+                    "INSERT INTO graph_nodes (id, type, label) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![id, ntype, label],
+                )
+                .unwrap();
+        }
+
+        // graph_edges 삽입
+        db.conn()
+            .execute(
+                "INSERT INTO graph_edges (source, target, relation, weight) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params!["session:topic-001", "topic:rust", "discusses_topic", 1.0],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO graph_edges (source, target, relation, weight) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params!["session:topic-001", "topic:async", "discusses_topic", 0.8],
+            )
+            .unwrap();
+        // 다른 relation은 포함되지 않아야 함
+        db.conn()
+            .execute(
+                "INSERT INTO graph_edges (source, target, relation, weight) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params!["session:topic-001", "file:main.rs", "modifies_file", 1.0],
+            )
+            .unwrap();
+
+        let topics = db
+            .get_topics_for_sessions(&["topic-001".to_string()])
+            .unwrap();
+        assert_eq!(topics.len(), 2);
+        assert!(topics.iter().all(|(_, t)| t.starts_with("topic:")));
     }
 }

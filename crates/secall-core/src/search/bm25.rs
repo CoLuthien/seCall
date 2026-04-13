@@ -309,6 +309,21 @@ impl SessionRepo for Database {
         Ok(count > 0)
     }
 
+    fn is_session_open(&self, session_id: &str) -> crate::error::Result<bool> {
+        let count: i64 = self.conn().query_row(
+            "SELECT COUNT(*) FROM sessions WHERE id = ?1 AND end_time IS NULL",
+            [session_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    fn delete_session(&self, session_id: &str) -> crate::error::Result<()> {
+        self.conn()
+            .execute("DELETE FROM sessions WHERE id = ?1", [session_id])?;
+        Ok(())
+    }
+
     fn get_session_meta(&self, session_id: &str) -> crate::error::Result<SessionMeta> {
         self.conn()
             .query_row(

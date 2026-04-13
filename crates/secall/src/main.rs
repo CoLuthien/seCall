@@ -49,6 +49,10 @@ enum Commands {
         /// Re-ingest already-indexed sessions (overwrite vault + DB)
         #[arg(long)]
         force: bool,
+
+        /// Skip semantic edge extraction during ingest
+        #[arg(long)]
+        no_semantic: bool,
     },
 
     /// Search session history
@@ -192,6 +196,12 @@ enum Commands {
         action: GraphAction,
     },
 
+    /// Generate daily work log from sessions
+    Log {
+        /// 날짜 (YYYY-MM-DD). 생략 시 오늘
+        date: Option<String>,
+    },
+
     /// View or modify configuration
     Config {
         #[command(subcommand)]
@@ -270,6 +280,15 @@ enum MigrateAction {
 
 #[derive(Subcommand)]
 enum GraphAction {
+    /// Re-extract semantic edges (LLM) for all sessions without rebuilding embeddings
+    Semantic {
+        /// 세션당 요청 사이 대기 시간(초). Ollama 과부하 방지용 (기본: 2)
+        #[arg(long, default_value_t = 2)]
+        delay: u64,
+        /// 처리할 최대 세션 수 (기본: 전체)
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Build graph from vault sessions
     Build {
         /// Only process sessions since this date (YYYY-MM-DD)
@@ -310,8 +329,10 @@ async fn main() -> anyhow::Result<()> {
             cwd,
             min_turns,
             force,
+            no_semantic,
         } => {
-            commands::ingest::run(path, auto, cwd, min_turns, force, &cli.format).await?;
+            commands::ingest::run(path, auto, cwd, min_turns, force, no_semantic, &cli.format)
+                .await?;
         }
         Commands::Recall {
             query,
@@ -414,7 +435,13 @@ async fn main() -> anyhow::Result<()> {
                 commands::migrate::run_summary(dry_run)?;
             }
         },
+        Commands::Log { date } => {
+            commands::log::run(date).await?;
+        }
         Commands::Graph { action } => match action {
+            GraphAction::Semantic { delay, limit } => {
+                commands::graph::run_semantic(delay, limit).await?;
+            }
             GraphAction::Build { since, force } => {
                 commands::graph::run_build(since.as_deref(), force)?;
             }

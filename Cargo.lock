@@ -3162,6 +3162,7 @@ dependencies = [
  "futures",
  "gethostname",
  "regex",
+ "reqwest 0.12.28",
  "secall-core",
  "serde",
  "serde_json",
