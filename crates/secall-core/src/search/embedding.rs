@@ -407,7 +407,7 @@ impl OpenVinoEmbedder {
         device: Option<&str>,
         openvino_dir: Option<&str>,
     ) -> Result<Self> {
-        let device = device.unwrap_or("NPU").to_string();
+        let device = device.unwrap_or("GPU").to_string();
         let tokenizer = tokenizers::Tokenizer::from_file(model_dir.join("tokenizer.json"))
             .map_err(|e| anyhow!("tokenizer load failed: {e}"))?;
 
