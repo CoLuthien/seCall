@@ -5,7 +5,8 @@ use crate::error::Result;
 use crate::ingest::markdown::parse_session_frontmatter;
 use crate::store::Database;
 
-use super::extract::{extract_from_frontmatter, extract_session_relations};
+use super::extract::{extract_from_frontmatter, extract_semantic_edges, extract_session_relations};
+use crate::ingest::markdown::extract_body_text;
 
 #[derive(Debug, Default)]
 pub struct BuildResult {
@@ -60,9 +61,11 @@ pub fn build_graph(
     // all_frontmatters: 관계 계산 대상 — 전체 vault 세션 (since 무관).
     // is_new: full upsert 대상 여부 (all_frontmatters와 1:1 대응).
     // needs_minimal_node: DB에 없고 is_new도 아닌 세션 — FK 충족을 위해 session 노드만 삽입.
+    // bodies: 시맨틱 엣지 추출용 본문 (is_new=true인 세션만 유효, 나머지는 빈 문자열)
     let mut all_frontmatters = Vec::new();
     let mut is_new: Vec<bool> = Vec::new();
     let mut needs_minimal_node: Vec<bool> = Vec::new();
+    let mut bodies: Vec<String> = Vec::new();
     let mut skipped = 0usize;
 
     for entry in &md_files {
@@ -112,9 +115,16 @@ pub fn build_graph(
         let minimal = !session_is_new && !already;
 
         // 모든 세션을 관계 계산에 포함 (since 이전 세션도 참여)
+        // 시맨틱 엣지 추출을 위해 신규 세션의 body를 보존, 나머지는 빈 문자열
+        let body = if session_is_new {
+            extract_body_text(&content)
+        } else {
+            String::new()
+        };
         all_frontmatters.push(fm);
         is_new.push(session_is_new);
         needs_minimal_node.push(minimal);
+        bodies.push(body);
     }
 
     // 새로 처리한 세션 수
@@ -141,7 +151,11 @@ pub fn build_graph(
         }
 
         // 개별 노드/엣지: 신규 세션만 full upsert
-        for (fm, &new_session) in all_frontmatters.iter().zip(is_new.iter()) {
+        for ((fm, &new_session), body) in all_frontmatters
+            .iter()
+            .zip(is_new.iter())
+            .zip(bodies.iter())
+        {
             if !new_session {
                 continue;
             }
@@ -151,6 +165,29 @@ pub fn build_graph(
                 total_nodes += 1;
             }
             for edge in &result.edges {
+                db.upsert_graph_edge(
+                    &edge.source,
+                    &edge.target,
+                    &edge.relation,
+                    &edge.confidence,
+                    edge.weight,
+                )?;
+                total_edges += 1;
+            }
+
+            // 시맨틱 엣지 (P1 rule-based): fixes_bug, modifies_file
+            let semantic = extract_semantic_edges(fm, body);
+            for edge in &semantic {
+                // 타겟 노드 자동 생성 (issue:N, file:path)
+                let (target_type, target_label) =
+                    if let Some(num) = edge.target.strip_prefix("issue:") {
+                        ("issue", num)
+                    } else if let Some(path) = edge.target.strip_prefix("file:") {
+                        ("file", path)
+                    } else {
+                        ("unknown", edge.target.as_str())
+                    };
+                db.upsert_graph_node(&edge.target, target_type, target_label, None)?;
                 db.upsert_graph_edge(
                     &edge.source,
                     &edge.target,
