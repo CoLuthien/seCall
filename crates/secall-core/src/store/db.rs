@@ -783,6 +783,91 @@ pub struct TurnRow {
     pub content: String,
 }
 
+/// 세션 메타데이터 (위키 생성용 경량 구조체)
+#[derive(Debug)]
+pub struct SessionMeta {
+    pub id: String,
+    pub agent: String,
+    pub project: Option<String>,
+    pub summary: Option<String>,
+    pub start_time: String,
+    pub turn_count: i64,
+    pub tools_used: Option<String>,
+    pub session_type: String,
+}
+
+impl Database {
+    /// 세션 메타데이터 + 턴 내용을 한번에 조회 (위키 생성용)
+    pub fn get_session_with_turns(&self, session_id: &str) -> Result<(SessionMeta, Vec<TurnRow>)> {
+        let meta = self.conn.query_row(
+            "SELECT id, agent, project, summary, start_time, turn_count, tools_used, session_type
+             FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| {
+                Ok(SessionMeta {
+                    id: row.get(0)?,
+                    agent: row.get(1)?,
+                    project: row.get(2)?,
+                    summary: row.get(3)?,
+                    start_time: row.get(4)?,
+                    turn_count: row.get(5)?,
+                    tools_used: row.get(6)?,
+                    session_type: row.get::<_, Option<String>>(7)?
+                        .unwrap_or_else(|| "interactive".to_string()),
+                })
+            },
+        ).map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                SecallError::SessionNotFound(session_id.to_string())
+            }
+            _ => SecallError::Database(e),
+        })?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT turn_index, role, content FROM turns
+             WHERE session_id = ?1 ORDER BY turn_index ASC",
+        )?;
+        let turns = stmt
+            .query_map([session_id], |row| {
+                Ok(TurnRow {
+                    turn_index: row.get::<_, i64>(0)? as u32,
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok((meta, turns))
+    }
+
+    /// since 날짜 이후 세션 목록 (위키 배치 생성용)
+    pub fn get_sessions_since(&self, since: &str) -> Result<Vec<SessionMeta>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, agent, project, summary, start_time, turn_count, tools_used, session_type
+             FROM sessions WHERE start_time >= ?1 ORDER BY start_time",
+        )?;
+        let rows = stmt
+            .query_map([since], |row| {
+                Ok(SessionMeta {
+                    id: row.get(0)?,
+                    agent: row.get(1)?,
+                    project: row.get(2)?,
+                    summary: row.get(3)?,
+                    start_time: row.get(4)?,
+                    turn_count: row.get(5)?,
+                    tools_used: row.get(6)?,
+                    session_type: row
+                        .get::<_, Option<String>>(7)?
+                        .unwrap_or_else(|| "interactive".to_string()),
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

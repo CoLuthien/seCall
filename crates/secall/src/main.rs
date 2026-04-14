@@ -247,7 +247,7 @@ enum WikiAction {
         #[arg(long, default_value = "sonnet")]
         model: String,
 
-        /// Backend: claude | ollama | lmstudio (기본값: config wiki.default_backend)
+        /// Backend: claude | haiku | ollama | lmstudio (기본값: config wiki.default_backend)
         #[arg(long)]
         backend: Option<String>,
 
@@ -262,6 +262,14 @@ enum WikiAction {
         /// Print the prompt without executing Claude Code
         #[arg(long)]
         dry_run: bool,
+
+        /// Review generated pages with Sonnet/Opus after generation
+        #[arg(long)]
+        review: bool,
+
+        /// Review model: sonnet or opus (default: config or sonnet)
+        #[arg(long)]
+        review_model: Option<String>,
     },
 
     /// Show wiki status (page count, last update)
@@ -416,6 +424,8 @@ async fn main() -> anyhow::Result<()> {
                 since,
                 session,
                 dry_run,
+                review,
+                review_model,
             } => {
                 commands::wiki::run_update(
                     &model,
@@ -423,6 +433,8 @@ async fn main() -> anyhow::Result<()> {
                     since.as_deref(),
                     session.as_deref(),
                     dry_run,
+                    review,
+                    review_model.as_deref(),
                 )
                 .await?;
             }

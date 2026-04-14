@@ -1,8 +1,12 @@
 pub mod claude;
+pub mod haiku;
+pub mod lint;
 pub mod lmstudio;
 pub mod ollama;
+pub mod review;
 
 pub use claude::ClaudeBackend;
+pub use haiku::HaikuBackend;
 pub use lmstudio::LmStudioBackend;
 pub use ollama::OllamaBackend;
 

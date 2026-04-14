@@ -113,12 +113,15 @@ impl Default for WikiBackendConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WikiConfig {
-    /// 기본 사용 백엔드: "claude" | "ollama" | "lmstudio"
+    /// 기본 사용 백엔드: "claude" | "haiku" | "ollama" | "lmstudio"
     #[serde(default = "default_wiki_backend")]
     pub default_backend: String,
     /// 백엔드별 설정 맵
     #[serde(default)]
     pub backends: std::collections::HashMap<String, WikiBackendConfig>,
+    /// --review 시 사용할 모델: "sonnet" | "opus"
+    #[serde(default)]
+    pub review_model: Option<String>,
 }
 
 fn default_wiki_backend() -> String {
@@ -130,6 +133,7 @@ impl Default for WikiConfig {
         WikiConfig {
             default_backend: default_wiki_backend(),
             backends: std::collections::HashMap::new(),
+            review_model: None,
         }
     }
 }

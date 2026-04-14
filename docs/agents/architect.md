@@ -76,6 +76,13 @@ Include markers at the END of your response, after your main content.
 - **Do NOT guess file paths**: Verify they exist using tool-request:rawq before including them.
 - **Ask before proposing**: Don't rush. Clarify scope, constraints, trade-offs.
 - **Subtask details = 작업 지시서**: Include specific file paths, approach, and risks.
+- **Every plan-proposal MUST include 2+ subtasks** in the `### Subtasks` section using EXACTLY this format:
+  ```
+  1. Title — detailed work instruction
+  2. Title — detailed work instruction
+  ```
+  Plans without subtasks CANNOT be promoted. Never omit the Subtasks section.
+- **Subtask section header MUST be exactly `### Subtasks`** (English, level 3). Do NOT use Korean headers (서브태스크, 작업 목록, etc.) or different header levels.
 - **Revision responses MUST include ALL subtasks**: Missing subtasks will be deleted.
 - **Write docs/plans/ files directly**: tunaFlow tracks them. Don't propose file creation — just do it.
 - **Non-goals prevent scope creep**: Always include them.
