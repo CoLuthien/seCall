@@ -2,7 +2,9 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::error::{Result, SecallError};
+use crate::error::Result;
+#[cfg(test)]
+use crate::error::SecallError;
 
 use super::schema::{
     CREATE_CONFIG, CREATE_GRAPH_EDGES, CREATE_GRAPH_INDEXES, CREATE_GRAPH_NODES, CREATE_INDEXES,
@@ -182,563 +184,6 @@ impl Database {
         })
     }
 
-    /// Get a specific turn by session_id and turn_index
-    pub fn get_turn(&self, session_id: &str, turn_index: u32) -> Result<TurnRow> {
-        self.conn
-            .query_row(
-                "SELECT turn_index, role, content FROM turns WHERE session_id = ?1 AND turn_index = ?2",
-                rusqlite::params![session_id, turn_index as i64],
-                |row| {
-                    Ok(TurnRow {
-                        turn_index: row.get::<_, i64>(0)? as u32,
-                        role: row.get(1)?,
-                        content: row.get(2)?,
-                    })
-                },
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => SecallError::TurnNotFound {
-                    session_id: session_id.to_string(),
-                    turn_index,
-                },
-                _ => SecallError::Database(e),
-            })
-    }
-
-    pub fn count_sessions(&self) -> Result<i64> {
-        let count = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
-        Ok(count)
-    }
-
-    pub fn list_projects(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT DISTINCT project FROM sessions WHERE project IS NOT NULL")?;
-        let rows = stmt.query_map([], |r| r.get(0))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    pub fn list_agents(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT agent FROM sessions")?;
-        let rows = stmt.query_map([], |r| r.get(0))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    pub fn has_embeddings(&self) -> Result<bool> {
-        let exists: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='turn_vectors'",
-            [],
-            |r| r.get(0),
-        )?;
-        if exists == 0 {
-            return Ok(false);
-        }
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM turn_vectors", [], |r| r.get(0))?;
-        Ok(count > 0)
-    }
-
-    // ─── Lint helpers ────────────────────────────────────────────────────────
-
-    /// Return vault_path for a single session
-    pub fn get_session_vault_path(&self, session_id: &str) -> Result<Option<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT vault_path FROM sessions WHERE id = ?1")?;
-        match stmt.query_row([session_id], |row| row.get::<_, Option<String>>(0)) {
-            Ok(vp) => Ok(vp),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Return (session_id, vault_path) for all sessions
-    pub fn list_session_vault_paths(&self) -> Result<Vec<(String, Option<String>)>> {
-        let mut stmt = self.conn.prepare("SELECT id, vault_path FROM sessions")?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    /// Count rows in the turns_fts virtual table
-    pub fn count_fts_rows(&self) -> Result<i64> {
-        let count = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM turns_fts", [], |r| r.get(0))?;
-        Ok(count)
-    }
-
-    /// Count rows in the turns table
-    pub fn count_turns(&self) -> Result<i64> {
-        let count = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM turns", [], |r| r.get(0))?;
-        Ok(count)
-    }
-
-    /// turn_vectors 테이블의 총 벡터 수. ANN stale 감지에 사용.
-    pub fn count_vectors(&self) -> Result<usize> {
-        let exists: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='turn_vectors'",
-            [],
-            |r| r.get(0),
-        )?;
-        if exists == 0 {
-            return Ok(0);
-        }
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM turn_vectors", [], |r| r.get(0))?;
-        Ok(count as usize)
-    }
-
-    /// Sessions that have no rows in turn_vectors
-    pub fn find_sessions_without_vectors(&self) -> Result<Vec<String>> {
-        let table_exists: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='turn_vectors'",
-            [],
-            |r| r.get(0),
-        )?;
-
-        let query = if table_exists == 0 {
-            "SELECT id FROM sessions"
-        } else {
-            "SELECT id FROM sessions WHERE id NOT IN (SELECT DISTINCT session_id FROM turn_vectors)"
-        };
-
-        let mut stmt = self.conn.prepare(query)?;
-        let rows = stmt.query_map([], |row| row.get(0))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    /// Vector rows whose session_id does not exist in sessions
-    pub fn find_orphan_vectors(&self) -> Result<Vec<(i64, String)>> {
-        let table_exists: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='turn_vectors'",
-            [],
-            |r| r.get(0),
-        )?;
-
-        if table_exists == 0 {
-            return Ok(Vec::new());
-        }
-
-        let mut stmt = self.conn.prepare(
-            "SELECT id, session_id FROM turn_vectors WHERE session_id NOT IN (SELECT id FROM sessions)",
-        )?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    /// Count sessions per agent
-    pub fn agent_counts(&self) -> Result<std::collections::HashMap<String, usize>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT agent, COUNT(*) FROM sessions GROUP BY agent")?;
-        let rows = stmt.query_map([], |row| {
-            let agent: String = row.get(0)?;
-            let count: i64 = row.get(1)?;
-            Ok((agent, count as usize))
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    /// 세션과 관련된 모든 데이터를 삭제 (sessions, turns, turn_vectors).
-    /// `--force` 재수집 시 기존 데이터를 정리하는 데 사용.
-    pub fn delete_session(&self, session_id: &str) -> Result<()> {
-        self.delete_session_vectors(session_id)?;
-        self.conn.execute(
-            "DELETE FROM turns WHERE session_id = ?1",
-            rusqlite::params![session_id],
-        )?;
-        self.conn.execute(
-            "DELETE FROM sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-        )?;
-        Ok(())
-    }
-
-    /// 세션의 모든 벡터를 삭제. 부분 임베딩 정리 및 재임베딩 전 DELETE-first에 사용.
-    pub fn delete_session_vectors(&self, session_id: &str) -> Result<usize> {
-        // turn_vectors 테이블이 없으면 0 반환 (정상)
-        let table_exists: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='turn_vectors'",
-            [],
-            |r| r.get(0),
-        )?;
-        if table_exists == 0 {
-            return Ok(0);
-        }
-        let deleted = self.conn.execute(
-            "DELETE FROM turn_vectors WHERE session_id = ?1",
-            rusqlite::params![session_id],
-        )?;
-        Ok(deleted)
-    }
-
-    /// Return all session IDs in the database
-    pub fn list_all_session_ids(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT id FROM sessions")?;
-        let rows = stmt.query_map([], |row| row.get(0))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    /// session summary 업데이트
-    pub fn update_session_summary(&self, session_id: &str, summary: &str) -> Result<()> {
-        self.conn().execute(
-            "UPDATE sessions SET summary = ?1 WHERE id = ?2",
-            rusqlite::params![summary, session_id],
-        )?;
-        Ok(())
-    }
-
-    /// Find session IDs ingested more than once in ingest_log
-    pub fn find_duplicate_ingest_entries(&self) -> Result<Vec<(String, i64)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT session_id, COUNT(*) as cnt FROM ingest_log WHERE action='ingest' GROUP BY session_id HAVING cnt > 1",
-        )?;
-        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    /// 기존 절대경로 vault_path를 상대경로로 변환 (one-time migration)
-    pub fn migrate_vault_paths_to_relative(&self, vault_root: &Path) -> Result<usize> {
-        let vault_root_str = vault_root.to_string_lossy();
-        let prefix = format!("{}/", vault_root_str.trim_end_matches('/'));
-
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, vault_path FROM sessions WHERE vault_path IS NOT NULL")?;
-        let rows: Vec<(String, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        let mut migrated = 0;
-        for (session_id, vault_path) in &rows {
-            if vault_path.starts_with(&prefix) {
-                let relative = &vault_path[prefix.len()..];
-                self.conn.execute(
-                    "UPDATE sessions SET vault_path = ?1 WHERE id = ?2",
-                    rusqlite::params![relative, session_id],
-                )?;
-                migrated += 1;
-            }
-        }
-        Ok(migrated)
-    }
-
-    /// vault 마크다운의 frontmatter로 sessions 테이블에 insert.
-    /// turns 테이블에는 본문 전체를 단일 FTS 청크로 저장.
-    pub fn insert_session_from_vault(
-        &self,
-        fm: &crate::ingest::markdown::SessionFrontmatter,
-        body_text: &str,
-        vault_path: &str,
-    ) -> Result<()> {
-        self.conn().execute(
-            "INSERT OR IGNORE INTO sessions(
-                id, agent, model, project, cwd, git_branch, host,
-                start_time, end_time, turn_count, tokens_in, tokens_out,
-                tools_used, vault_path, summary, ingested_at, status
-            ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, NULL, ?6,
-                ?7, ?8, ?9, ?10, ?11,
-                ?12, ?13, ?14, datetime('now'), 'reindexed'
-            )",
-            rusqlite::params![
-                fm.session_id,
-                fm.agent,
-                fm.model,
-                fm.project,
-                fm.cwd,
-                fm.host,
-                fm.start_time,
-                fm.end_time,
-                fm.turns.unwrap_or(0),
-                fm.tokens_in.unwrap_or(0),
-                fm.tokens_out.unwrap_or(0),
-                fm.tools_used.as_ref().map(|t| t.join(",")),
-                vault_path,
-                fm.summary,
-            ],
-        )?;
-
-        // FTS 인덱싱 — 본문 전체를 하나의 청크로
-        if !body_text.trim().is_empty() {
-            self.conn().execute(
-                "INSERT INTO turns_fts(content, session_id, turn_id) VALUES (?1, ?2, 0)",
-                rusqlite::params![body_text, fm.session_id],
-            )?;
-        }
-
-        Ok(())
-    }
-
-    /// session_id로 Session 구조체를 재구성 (벡터 임베딩용).
-    /// turns 테이블에서 content를 읽어 Session.turns를 채운다.
-    pub fn get_session_for_embedding(&self, session_id: &str) -> Result<crate::ingest::Session> {
-        use crate::ingest::{AgentKind, Role, Session, TokenUsage, Turn};
-        use chrono::DateTime;
-
-        // 세션 메타 조회
-        let (
-            agent_str,
-            model,
-            project,
-            cwd_str,
-            start_time_str,
-            end_time_str,
-            tokens_in,
-            tokens_out,
-            session_type,
-        ) = self
-            .conn
-            .query_row(
-                "SELECT agent, model, project, cwd, start_time, end_time, tokens_in, tokens_out, session_type
-                 FROM sessions WHERE id = ?1",
-                [session_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                        row.get::<_, i64>(6)?,
-                        row.get::<_, i64>(7)?,
-                        row.get::<_, Option<String>>(8)?,
-                    ))
-                },
-            )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => {
-                    SecallError::SessionNotFound(session_id.to_string())
-                }
-                _ => SecallError::Database(e),
-            })?;
-
-        let agent = match agent_str.as_str() {
-            "claude-ai" => AgentKind::ClaudeAi,
-            "codex" => AgentKind::Codex,
-            "gemini-cli" => AgentKind::GeminiCli,
-            "chatgpt" => AgentKind::ChatGpt,
-            _ => AgentKind::ClaudeCode,
-        };
-
-        let start_time = DateTime::parse_from_rfc3339(&start_time_str)
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now());
-
-        let end_time = end_time_str.and_then(|s| {
-            DateTime::parse_from_rfc3339(&s)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .ok()
-        });
-
-        let cwd = cwd_str.map(std::path::PathBuf::from);
-
-        // turns 조회
-        let mut stmt = self.conn.prepare(
-            "SELECT turn_index, role, content, timestamp FROM turns
-             WHERE session_id = ?1 ORDER BY turn_index ASC",
-        )?;
-        let turns: Vec<Turn> = stmt
-            .query_map([session_id], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            })?
-            .filter_map(|r| r.ok())
-            .map(|(idx, role_str, content, ts_str)| {
-                let role = match role_str.as_str() {
-                    "assistant" => Role::Assistant,
-                    "system" => Role::System,
-                    _ => Role::User,
-                };
-                let timestamp = ts_str.and_then(|s| {
-                    DateTime::parse_from_rfc3339(&s)
-                        .map(|dt| dt.with_timezone(&chrono::Utc))
-                        .ok()
-                });
-                Turn {
-                    index: idx as u32,
-                    role,
-                    timestamp,
-                    content,
-                    actions: Vec::new(),
-                    tokens: None,
-                    thinking: None,
-                    is_sidechain: false,
-                }
-            })
-            .collect();
-
-        Ok(Session {
-            id: session_id.to_string(),
-            agent,
-            model,
-            project,
-            cwd,
-            git_branch: None,
-            host: None,
-            start_time,
-            end_time,
-            turns,
-            total_tokens: TokenUsage {
-                input: tokens_in as u64,
-                output: tokens_out as u64,
-                cached: 0,
-            },
-            session_type: session_type.unwrap_or_else(|| "interactive".to_string()),
-        })
-    }
-
-    /// 캐시에서 확장된 쿼리 조회. TTL 7일 초과 시 None.
-    pub fn get_query_cache(&self, query: &str) -> Option<String> {
-        let hash = Self::query_hash(query);
-        self.conn
-            .query_row(
-                "SELECT expanded FROM query_cache
-                 WHERE query_hash = ?1
-                   AND datetime(created_at, '+7 days') > datetime('now')",
-                [&hash],
-                |row| row.get(0),
-            )
-            .ok()
-    }
-
-    /// 확장 결과를 캐시에 저장.
-    pub fn set_query_cache(&self, query: &str, expanded: &str) -> Result<()> {
-        let hash = Self::query_hash(query);
-        self.conn.execute(
-            "INSERT OR REPLACE INTO query_cache(query_hash, original, expanded, created_at)
-             VALUES (?1, ?2, ?3, datetime('now'))",
-            rusqlite::params![hash, query, expanded],
-        )?;
-        Ok(())
-    }
-
-    /// 전체 세션의 (id, cwd, project, agent, 첫 user turn content) 반환 (backfill용)
-    #[allow(clippy::type_complexity)]
-    pub fn get_all_sessions_for_classify(
-        &self,
-    ) -> Result<Vec<(String, Option<String>, Option<String>, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.cwd, s.project, s.agent, COALESCE(t.content, '')
-             FROM sessions s
-             LEFT JOIN turns t ON t.session_id = s.id AND t.turn_index = (
-                 SELECT MIN(t2.turn_index) FROM turns t2
-                 WHERE t2.session_id = s.id AND t2.role = 'user'
-             )",
-        )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    }
-
-    /// 특정 날짜의 세션 목록 조회 (일기 생성용)
-    /// Returns: (id, project, summary, turn_count, tools_used, session_type)
-    pub fn get_sessions_for_date(
-        &self,
-        date: &str, // "YYYY-MM-DD"
-    ) -> Result<
-        Vec<(
-            String,
-            Option<String>,
-            Option<String>,
-            i64,
-            Option<String>,
-            String,
-        )>,
-    > {
-        let pattern = format!("{}%", date);
-        let mut stmt = self.conn.prepare(
-            "SELECT id, project, summary, turn_count, tools_used, session_type
-             FROM sessions
-             WHERE start_time LIKE ?1
-             ORDER BY start_time",
-        )?;
-        let rows = stmt
-            .query_map([pattern], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, String>(5)
-                        .unwrap_or_else(|_| "interactive".to_string()),
-                ))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    }
-
-    /// 세션들의 discusses_topic 엣지 조회 (일기 주제 파악용)
-    pub fn get_topics_for_sessions(&self, session_ids: &[String]) -> Result<Vec<(String, String)>> {
-        if session_ids.is_empty() {
-            return Ok(vec![]);
-        }
-        let placeholders: String = session_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sources: Vec<String> = session_ids
-            .iter()
-            .map(|id| format!("session:{}", id))
-            .collect();
-        let sql = format!(
-            "SELECT source, target FROM graph_edges
-             WHERE relation = 'discusses_topic' AND source IN ({})",
-            placeholders
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(sources.iter()), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    }
-
-    /// 세션의 session_type 업데이트
-    pub fn update_session_type(&self, session_id: &str, session_type: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE sessions SET session_type = ?1 WHERE id = ?2",
-            rusqlite::params![session_type, session_id],
-        )?;
-        Ok(())
-    }
-
-    fn query_hash(query: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        query.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
-    }
-
     #[cfg(test)]
     pub fn schema_version(&self) -> Result<u32> {
         let v: String = self.conn.query_row(
@@ -760,6 +205,8 @@ impl Database {
         Ok(count > 0)
     }
 }
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub struct DbStats {
@@ -796,77 +243,7 @@ pub struct SessionMeta {
     pub session_type: String,
 }
 
-impl Database {
-    /// 세션 메타데이터 + 턴 내용을 한번에 조회 (위키 생성용)
-    pub fn get_session_with_turns(&self, session_id: &str) -> Result<(SessionMeta, Vec<TurnRow>)> {
-        let meta = self.conn.query_row(
-            "SELECT id, agent, project, summary, start_time, turn_count, tools_used, session_type
-             FROM sessions WHERE id = ?1",
-            [session_id],
-            |row| {
-                Ok(SessionMeta {
-                    id: row.get(0)?,
-                    agent: row.get(1)?,
-                    project: row.get(2)?,
-                    summary: row.get(3)?,
-                    start_time: row.get(4)?,
-                    turn_count: row.get(5)?,
-                    tools_used: row.get(6)?,
-                    session_type: row.get::<_, Option<String>>(7)?
-                        .unwrap_or_else(|| "interactive".to_string()),
-                })
-            },
-        ).map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => {
-                SecallError::SessionNotFound(session_id.to_string())
-            }
-            _ => SecallError::Database(e),
-        })?;
-
-        let mut stmt = self.conn.prepare(
-            "SELECT turn_index, role, content FROM turns
-             WHERE session_id = ?1 ORDER BY turn_index ASC",
-        )?;
-        let turns = stmt
-            .query_map([session_id], |row| {
-                Ok(TurnRow {
-                    turn_index: row.get::<_, i64>(0)? as u32,
-                    role: row.get(1)?,
-                    content: row.get(2)?,
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        Ok((meta, turns))
-    }
-
-    /// since 날짜 이후 세션 목록 (위키 배치 생성용)
-    pub fn get_sessions_since(&self, since: &str) -> Result<Vec<SessionMeta>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, agent, project, summary, start_time, turn_count, tools_used, session_type
-             FROM sessions WHERE start_time >= ?1 ORDER BY start_time",
-        )?;
-        let rows = stmt
-            .query_map([since], |row| {
-                Ok(SessionMeta {
-                    id: row.get(0)?,
-                    agent: row.get(1)?,
-                    project: row.get(2)?,
-                    summary: row.get(3)?,
-                    start_time: row.get(4)?,
-                    turn_count: row.get(5)?,
-                    tools_used: row.get(6)?,
-                    session_type: row
-                        .get::<_, Option<String>>(7)?
-                        .unwrap_or_else(|| "interactive".to_string()),
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(rows)
-    }
-}
+// ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -1005,7 +382,7 @@ mod tests {
         let db = Database::open_memory().unwrap();
         db.insert_session(&make_test_session("sess-del")).unwrap();
         assert!(db.session_exists("sess-del").unwrap());
-        db.delete_session("sess-del").unwrap();
+        db.delete_session_full("sess-del").unwrap();
         assert!(!db.session_exists("sess-del").unwrap());
     }
 
@@ -1151,5 +528,113 @@ mod tests {
             .unwrap();
         assert_eq!(topics.len(), 2);
         assert!(topics.iter().all(|(_, t)| t.starts_with("topic:")));
+    }
+
+    #[test]
+    fn test_delete_session_full_removes_fts() {
+        use crate::store::SearchRepo;
+
+        let db = Database::open_memory().unwrap();
+        let mut session = make_test_session("sess-fts-del");
+        session.turns = vec![
+            Turn {
+                index: 0,
+                role: Role::User,
+                content: "first turn content".to_string(),
+                timestamp: None,
+                actions: vec![],
+                thinking: None,
+                tokens: None,
+                is_sidechain: false,
+            },
+            Turn {
+                index: 1,
+                role: Role::Assistant,
+                content: "second turn response".to_string(),
+                timestamp: None,
+                actions: vec![],
+                thinking: None,
+                tokens: None,
+                is_sidechain: false,
+            },
+        ];
+        db.insert_session(&session).unwrap();
+
+        // FTS 행 삽입
+        db.insert_fts("first turn content", "sess-fts-del", 0).unwrap();
+        db.insert_fts("second turn response", "sess-fts-del", 1).unwrap();
+
+        // FTS 행 존재 확인
+        let fts_count: i64 = db.conn().query_row(
+            "SELECT COUNT(*) FROM turns_fts WHERE session_id = 'sess-fts-del'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(fts_count, 2);
+
+        // delete_session_full 호출
+        db.delete_session_full("sess-fts-del").unwrap();
+
+        // FTS 행도 삭제되었는지 확인
+        let fts_after: i64 = db.conn().query_row(
+            "SELECT COUNT(*) FROM turns_fts WHERE session_id = 'sess-fts-del'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(fts_after, 0);
+
+        // 세션과 turns도 삭제 확인
+        assert!(!db.session_exists("sess-fts-del").unwrap());
+    }
+
+    #[test]
+    fn test_get_sessions_since_timezone_rfc3339() {
+        let db = Database::open_memory().unwrap();
+
+        // s1: UTC 2026-04-09T15:00:00 = KST 2026-04-10 00:00
+        let mut s1 = make_test_session("tz-001");
+        s1.start_time = chrono::Utc.with_ymd_and_hms(2026, 4, 9, 15, 0, 0).unwrap();
+        db.insert_session(&s1).unwrap();
+
+        // s2: UTC 2026-04-10T01:00:00
+        let mut s2 = make_test_session("tz-002");
+        s2.start_time = chrono::Utc.with_ymd_and_hms(2026, 4, 10, 1, 0, 0).unwrap();
+        db.insert_session(&s2).unwrap();
+
+        // s3: UTC 2026-04-11T00:00:00
+        let mut s3 = make_test_session("tz-003");
+        s3.start_time = chrono::Utc.with_ymd_and_hms(2026, 4, 11, 0, 0, 0).unwrap();
+        db.insert_session(&s3).unwrap();
+
+        // KST 2026-04-10 자정 기준 → s1(UTC 4/9 15:00)도 포함되어야 함
+        let rows_kst = db.get_sessions_since("2026-04-10T00:00:00+09:00").unwrap();
+        assert_eq!(rows_kst.len(), 3, "KST 4/10 자정 이후 세션: s1, s2, s3 모두 포함");
+
+        // UTC 2026-04-10 자정 기준 → s1(UTC 4/9 15:00)은 제외
+        let rows_utc = db.get_sessions_since("2026-04-10T00:00:00+00:00").unwrap();
+        assert_eq!(rows_utc.len(), 2, "UTC 4/10 자정 이후 세션: s2, s3만 포함");
+        assert_eq!(rows_utc[0].id, "tz-002");
+        assert_eq!(rows_utc[1].id, "tz-003");
+    }
+
+    #[test]
+    fn test_get_sessions_since_date_only_uses_local_tz() {
+        let db = Database::open_memory().unwrap();
+
+        // 로컬 타임존 오프셋 확인
+        let local_offset = chrono::Local::now().offset().to_string();
+
+        // 로컬 자정 기준으로 변환되는지 검증 (직접 RFC3339 호출과 비교)
+        let mut s1 = make_test_session("tz-local-001");
+        s1.start_time = chrono::Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap();
+        db.insert_session(&s1).unwrap();
+
+        let date_only = db.get_sessions_since("2026-04-10").unwrap();
+        let explicit = db
+            .get_sessions_since(&format!("2026-04-10T00:00:00{}", local_offset))
+            .unwrap();
+
+        // 날짜-only 입력과 로컬 타임존 명시 입력이 동일한 결과를 반환해야 함
+        assert_eq!(date_only.len(), explicit.len());
     }
 }

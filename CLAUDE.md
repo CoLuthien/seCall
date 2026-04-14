@@ -90,19 +90,22 @@
 ## 7. Current Status
 
 ### Completed
-- (record here)
+- P18 Rev.2 — 세션 분류 regex 사전 컴파일 및 에러 전파
+- P22 Rev.2 — Wiki 파이프라인 (Haiku 생성, lint, review + auto-retry)
+- Semantic graph extraction — 694세션 완료 (348 skipped, 0 failed)
 
 ### In Progress
-- (record here)
+- (none)
 
 ### Known Issues
-- (record here)
+- (none)
 
 ---
 
 ## 8. Next Priorities
 
-1. (record here)
+1. (P1) Wiki 파이프라인 실행 검증 — 소규모(10~20세션) dry-run으로 end-to-end 동작 확인. API 비용 수반.
+2. (P1) Semantic graph 활용 — 추출된 694세션 edge 데이터를 검색/탐색에 반영하는 기능 설계. 별도 플랜 필요.
 
 <!-- tunaflow:context-start -->
 Project: /Users/d9ng/privateProject/seCall

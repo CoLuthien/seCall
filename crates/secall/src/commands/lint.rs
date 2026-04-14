@@ -101,7 +101,7 @@ fn run_fix(db: &Database, report: &secall_core::ingest::lint::LintReport) -> Res
         stale.len()
     );
     for session_id in &stale {
-        match db.delete_session(session_id) {
+        match db.delete_session_full(session_id) {
             Ok(()) => eprintln!("  deleted {}", &session_id[..session_id.len().min(8)]),
             Err(e) => eprintln!(
                 "  failed to delete {}: {e}",

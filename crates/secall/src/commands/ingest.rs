@@ -264,7 +264,7 @@ pub async fn ingest_sessions(
                     match db.is_session_open(session_id_hint) {
                         Ok(true) => {
                             // 기존 레코드 삭제 후 재인제스트
-                            if let Err(e) = db.delete_session(session_id_hint) {
+                            if let Err(e) = db.delete_session_full(session_id_hint) {
                                 tracing::warn!(
                                     session = session_id_hint,
                                     "failed to delete open session: {}",
@@ -528,14 +528,41 @@ fn ingest_single_session(
     }
 
     // 실제 session.id 기준 중복 체크 (--force 시 기존 데이터 삭제 후 재삽입)
+    // compact 후 turn 수가 크게 증가한 경우 자동 재인제스트
     match db.session_exists(&session.id) {
         Ok(true) if !force => {
-            *skipped += 1;
-            return;
+            // DB turn 수와 파싱된 turn 수 비교 — compact 이후 turn 누락 감지
+            let db_turn_count = match db.count_turns_for_session(&session.id) {
+                Ok(count) => count,
+                Err(e) => {
+                    tracing::warn!(session = &session.id, error = %e, "failed to count turns, skipping");
+                    *skipped += 1;
+                    return;
+                }
+            };
+            if session.turns.len() > db_turn_count + 10
+                && session.turns.len() > db_turn_count * 2
+            {
+                tracing::info!(
+                    session = &session.id,
+                    db_turns = db_turn_count,
+                    parsed_turns = session.turns.len(),
+                    "re-ingesting session with significantly more turns"
+                );
+                if let Err(e) = db.delete_session_full(&session.id) {
+                    tracing::warn!(session = &session.id, error = %e, "failed to delete session for auto re-ingest");
+                    *errors += 1;
+                    return;
+                }
+                // 아래로 계속 진행하여 재인제스트
+            } else {
+                *skipped += 1;
+                return;
+            }
         }
         Ok(true) => {
             // --force: 기존 세션 데이터 삭제 (turns, vectors 포함)
-            if let Err(e) = db.delete_session(&session.id) {
+            if let Err(e) = db.delete_session_full(&session.id) {
                 tracing::warn!(session = &session.id, error = %e, "failed to delete existing session for --force");
                 error_details.push(IngestError {
                     path: String::new(),
